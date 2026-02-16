@@ -24,7 +24,7 @@ import {
   recordAudit,
 } from '../storage/index.js';
 import { triageFindings } from '../decision/index.js';
-import { buildCleanupChecklist, buildImplementationGuide, matchFindingsToBaselines } from '../knowledge/index.js';
+import { buildCleanupChecklist, buildDocumentationGuide, buildImplementationGuide, matchFindingsToBaselines } from '../knowledge/index.js';
 import type { ResearchPerspective } from '../types/index.js';
 import type { TaskClassification } from '../types/index.js';
 import type { RoutingDecision } from '../routing/router.js';
@@ -55,14 +55,14 @@ export interface PipelineState {
 export type CommandName = 'refine' | 'assess' | 'review' | 'improve' | 'audit' | 'consult';
 export type OverlayName =
   | 'research' | 'classify' | 'deliberate' | 'triage'
-  | 'align' | 'plan' | 'execute' | 'cleanup' | 'release'
-  | 'propagate' | 'consult';
+  | 'align' | 'plan' | 'execute' | 'cleanup' | 'document'
+  | 'release' | 'propagate' | 'consult';
 
 const COMMAND_OVERLAYS: Record<CommandName, OverlayName[]> = {
-  refine:  ['research', 'classify', 'triage', 'align', 'plan', 'execute', 'cleanup', 'release', 'propagate'],
+  refine:  ['research', 'classify', 'triage', 'align', 'plan', 'execute', 'cleanup', 'document', 'release', 'propagate'],
   assess:  ['research', 'classify'],
   review:  ['classify', 'deliberate', 'align'],
-  improve: ['research', 'triage', 'align', 'plan', 'execute', 'cleanup'],
+  improve: ['research', 'triage', 'align', 'plan', 'execute', 'cleanup', 'document'],
   audit:   ['research', 'classify'],
   consult: ['classify', 'deliberate', 'align'],
 };
@@ -117,6 +117,7 @@ const OVERLAY_DESCRIPTIONS: Record<OverlayName, string> = {
   plan: 'Delivery planning',
   execute: 'PR creation & testing',
   cleanup: 'Post-change cleanup & artifact verification',
+  document: 'Documentation update — README, architecture, config reference',
   release: 'Semantic versioning & release',
   propagate: 'Cross-server improvement propagation',
   consult: 'Expert consultation',
@@ -329,6 +330,7 @@ function executeCurrentStep(pipeline: PipelineState, initialInput?: Record<strin
     case 'plan': return executePlanOverlay(pipeline);
     case 'execute': return executeExecuteOverlay(pipeline);
     case 'cleanup': return executeCleanupOverlay(pipeline);
+    case 'document': return executeDocumentOverlay(pipeline);
     case 'release': return executeReleaseOverlay(pipeline);
     case 'propagate': return executePropagateOverlay(pipeline);
     case 'consult': return executeDeliberateOverlay(pipeline);
@@ -588,6 +590,43 @@ function executeExecuteOverlay(pipeline: PipelineState): StepResult {
     description: 'Implement the planned changes following MCP tool implementation standards, then create the PR.',
     bootstrap_prompt: `${agents} executing delivery plan for ${pipeline.target_server_id}.\n\n${implGuide}\n\n**CRITICAL**: All new or modified tools MUST follow the implementation standards above. Any tool that does not meet these standards will be flagged in the cleanup phase.\n\nAfter implementing changes:\n1. Verify every tool has Zod schemas with .describe() on every parameter\n2. Verify every tool has a clear description (what, when, returns)\n3. Verify every tool response uses the output() helper with next-step guidance\n4. Verify every tool handler has try/catch with structured error responses\n5. Use delivery_create_pr with the plan details\n\nThen: pipeline_next with pipeline_id="${pipeline.pipeline_id}"`,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Documentation Overlay — update README, architecture, and config docs
+// ---------------------------------------------------------------------------
+
+function executeDocumentOverlay(pipeline: PipelineState): StepResult {
+  const step = pipeline.step_within_overlay;
+  const agents = engagedNames(pipeline, ['code_smith', 'researcher']);
+
+  if (step === 0) {
+    const docGuide = buildDocumentationGuide();
+
+    pipeline.status = 'waiting_agent';
+    store().update(pipeline.pipeline_id, pipeline);
+
+    return stepResult(pipeline, overlay_label('document'),
+      `${agents} updating documentation to match code changes.`, 'waiting_agent', {
+      control: 'agent',
+      description: 'Update all documentation to reflect changes made in this pipeline. README, architecture docs, configuration reference, and CHANGELOG must be current.',
+      bootstrap_prompt: `${agents}: Documentation pass for ${pipeline.target_server_id}.\n\n${docGuide}\n\n**CRITICAL**: Documentation ships with code. No release proceeds with stale docs.\n\nAfter updating all documentation:\n1. Verify README tool inventory matches registered tools exactly\n2. Verify setup instructions work for a fresh install\n3. Verify architecture docs reflect current structure\n4. Verify CHANGELOG has an entry for this change\n5. Verify configuration reference covers all env vars and options\n\nThen: pipeline_next with pipeline_id="${pipeline.pipeline_id}"`,
+    });
+  }
+
+  // Step 1+ — agent submitted documentation updates
+  if (step > 0) {
+    pipeline.data.documentation_completed = true;
+    pipeline.data.documentation_step = step;
+
+    recordAudit('pipeline.documentation', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+      overlay: 'document', passed: true,
+    });
+
+    return advanceToNextOverlay(pipeline);
+  }
+
+  return advanceToNextOverlay(pipeline);
 }
 
 function executeReleaseOverlay(pipeline: PipelineState): StepResult {

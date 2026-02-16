@@ -212,6 +212,16 @@ const PATTERNS: BaselinePattern[] = [
     severity: 'high',
   },
   {
+    pattern_id: 'documentation_currency',
+    name: 'Documentation Ships with Code',
+    category: 'maintenance',
+    description: 'Every change that adds, removes, or modifies tools, resources, configuration, or architecture must update the corresponding documentation before release. This includes: README.md (tool inventory, setup, usage), architecture docs, configuration reference, and inline JSDoc/TSDoc. Documentation is not a follow-up task — it is part of the definition of done.',
+    why_it_matters: 'Stale documentation is worse than no documentation — it actively misleads. When tools change but docs do not, agents construct wrong calls, users follow outdated setup steps, and onboarding becomes a guessing game. Every undocumented tool is a tool nobody will use correctly.',
+    detection_hints: ['README references tools that no longer exist', 'new tools not listed in README', 'setup instructions reference removed config', 'architecture docs describe old structure', 'no tool inventory in README', 'missing usage examples', 'changelog not updated'],
+    recommendation_when_missing: 'Add a documentation pass after every code change. Update: README tool inventory, setup/config sections, architecture diagrams, usage examples, and CHANGELOG. Verify every tool listed in code appears in README and vice versa.',
+    severity: 'high',
+  },
+  {
     pattern_id: 'resource_uri_quality',
     name: 'Well-Formed Resource URIs',
     category: 'devex',
@@ -303,6 +313,16 @@ Run this verification after implementing changes. Report any issues found.
 20. **Agent bootstraps name specific tools** — Any next block with control="agent" must name the specific tool to call and include key parameters. "Proceed with the pipeline" is not acceptable.
 21. **User prompts end with questions or options** — Any next block with control="user" must end with a clear question, numbered options, or explicit instructions. "Review the data above" alone is not acceptable.
 22. **Error paths include recovery** — Every error response must include: what went wrong, likely causes, and specific tool calls or actions to recover.
+
+### Documentation Currency (for every change)
+
+23. **README tool inventory sync** — List all tools registered in code. List all tools described in README. The two lists must match exactly. Flag any tool in code but not in README, or in README but not in code.
+24. **Setup instructions validity** — Read the setup/install section. Does it reference current dependencies, correct commands, and valid config? Flag outdated steps.
+25. **Configuration reference completeness** — List all process.env reads and config accesses in code. Every one must appear in the documentation. Flag any undocumented config.
+26. **Architecture doc accuracy** — Does the architecture documentation describe the current module structure, overlay order, and data flow? Flag references to removed or renamed modules.
+27. **CHANGELOG entry** — Does a CHANGELOG (or equivalent) have an entry for the changes made? Flag if missing.
+28. **No phantom doc references** — Search documentation for tool names, config keys, file paths, or module names that no longer exist in code. Every one is a stale reference.
+29. **Example code validity** — Do code examples in documentation use current API signatures, parameter names, and tool names? Flag any that reference old or removed interfaces.
 
 Return findings as structured JSON — same format as research findings.`;
 }
@@ -465,7 +485,113 @@ If the server has more than 5-7 tools, group related operations behind facade to
 
 - Use only the minimum required imports from \`@modelcontextprotocol/sdk\` and \`zod\`
 - Prefer Node.js built-ins over external dependencies
-- Do not introduce new runtime dependencies without explicit approval`;
+- Do not introduce new runtime dependencies without explicit approval
+
+### 9. Documentation Ships with Code
+
+Every change MUST include corresponding documentation updates. Documentation is part of the definition of done — not a follow-up task.
+
+Required documentation artifacts:
+- **README.md** — Tool inventory (name, description, parameters), setup instructions, usage examples
+- **Architecture docs** — Updated to reflect current module structure, data flow, and key decisions
+- **Configuration reference** — All environment variables, config files, and their defaults
+- **CHANGELOG** — Entry for every user-facing or developer-facing change
+- **Inline docs** — JSDoc/TSDoc on exported functions with parameter descriptions
+
+Verification checklist:
+1. Every registered tool appears in the README tool inventory
+2. Every tool in the README still exists in code
+3. Setup instructions work for a fresh clone
+4. Architecture description matches current module layout
+5. Config reference covers all env vars and options`;
+}
+
+/**
+ * Build a comprehensive documentation guide that instructs agents on which
+ * documents to create or update after code changes. This is injected into
+ * the `document` overlay's bootstrap prompt.
+ */
+export function buildDocumentationGuide(): string {
+  return `## Documentation Update Requirements
+
+Documentation ships with code. Every change that adds, removes, or modifies tools, resources, configuration, or architecture MUST update the corresponding documentation before the pipeline can proceed to release.
+
+### Required Documentation Artifacts
+
+#### 1. README.md — The Entry Point
+
+The README is the first thing users and agents read. It MUST contain:
+
+**Tool Inventory Table** — Every registered tool with:
+- Tool name (exact match to code registration)
+- One-line description of what it does
+- Required vs optional parameters
+- Brief usage example or link to detailed docs
+
+**Setup Instructions** — Must work for a fresh clone:
+- Prerequisites (Node.js version, required API keys, etc.)
+- Install steps (\`npm install\`, env config, etc.)
+- How to run (stdio, HTTP, etc.)
+- How to verify it works (a smoke-test command or example)
+
+**Configuration Reference** — Every configurable option:
+- Environment variables with descriptions and defaults
+- Config file format and location
+- Required vs optional settings
+
+**Quick-Start Examples** — At least one working example showing:
+- How to connect to the server
+- How to call the most common tool
+- What the response looks like
+
+#### 2. Architecture Documentation
+
+If the server has more than a few files, maintain an architecture overview:
+- Module/directory structure with brief descriptions
+- Data flow diagram (can be text-based, e.g., mermaid)
+- Key design decisions and why they were made
+- Integration points (external APIs, databases, other servers)
+
+Update this whenever:
+- New modules or directories are added
+- Data flow changes
+- New external integrations are added
+- Pipeline or overlay structure changes
+
+#### 3. CHANGELOG
+
+Maintain a CHANGELOG.md (or equivalent section in README) with:
+- Version or date
+- What changed (added, changed, removed, fixed)
+- Migration notes if breaking changes were introduced
+
+#### 4. Inline Documentation
+
+Exported functions and types MUST have JSDoc/TSDoc:
+- What the function does
+- Parameter descriptions
+- Return type and meaning
+- Example usage for complex functions
+
+### Verification Checklist
+
+Before marking documentation complete:
+
+1. **Tool-to-doc sync** — List all tools registered in code. List all tools in README. The two lists must match exactly. Flag any mismatch.
+2. **Setup smoke test** — Read the setup instructions as if you are a new user. Would they work on a fresh machine? Flag any missing steps.
+3. **Config completeness** — List all \`process.env\` reads and config file accesses. Every one must appear in the configuration reference.
+4. **Architecture accuracy** — Does the architecture doc describe the current module structure? Flag any references to removed or renamed modules.
+5. **CHANGELOG entry** — Does the CHANGELOG have an entry for the changes made in this pipeline? Flag if missing.
+6. **No phantom references** — Search docs for tool names, config keys, or module names that no longer exist in code. Every one is a bug.
+7. **Example validity** — Do code examples in docs use current API signatures? Flag any that reference old parameter names or removed tools.
+
+### What NOT to Document
+
+- Internal implementation details that change frequently (document the interface, not the internals)
+- Auto-generated content that a build step produces (document where to find it, not the content itself)
+- Secrets, API keys, or credentials (document that they are needed and where to set them, never the values)
+
+Return findings as structured JSON — same format as research findings.`;
 }
 
 /**

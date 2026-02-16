@@ -27,21 +27,22 @@ These principles define its identity and must not be violated.
 ## Pipeline overlay order
 
 ```
-refine:  research → classify → triage → ALIGN → plan → execute → CLEANUP → release → propagate
-improve: research → triage → ALIGN → plan → execute → CLEANUP
+refine:  research → classify → triage → ALIGN → plan → execute → CLEANUP → DOCUMENT → release → propagate
+improve: research → triage → ALIGN → plan → execute → CLEANUP → DOCUMENT
 review:  classify → deliberate → ALIGN
 consult: classify → deliberate → ALIGN
 assess:  research → classify
 audit:   research → classify
 ```
 
-`align` appears in every command that leads to changes. `cleanup` appears in every command that executes changes.
+`align` appears in every command that leads to changes. `cleanup` appears in every command that executes changes. `document` appears after cleanup in every command that produces code — documentation ships with code, never as a follow-up.
 
 ## When modifying the orchestrator
 
 - New overlays go in the `OverlayName` type, `OVERLAY_DESCRIPTIONS`, `COMMAND_OVERLAYS`, and the `executeCurrentStep` switch
 - `align` must remain before any overlay that modifies external state
 - `cleanup` must remain after `execute`
+- `document` must remain after `cleanup` but before `release` — docs ship with code
 - `propagate` must remain last in any pipeline that produces validated improvements
 
 ## When modifying tools

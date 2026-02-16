@@ -39,7 +39,7 @@ export type AuditAction =
   | 'delivery.plan' | 'delivery.pr_created' | 'delivery.tests_run'
   | 'delivery.released' | 'delivery.rolled_back'
   | 'governance.approval' | 'governance.escalation' | 'policy.violation'
-  | 'pipeline.start' | 'pipeline.cleanup'
+  | 'pipeline.start' | 'pipeline.cleanup' | 'pipeline.documentation'
   | 'deliberation.start' | 'deliberation.resolve';
 
 // ---------------------------------------------------------------------------
