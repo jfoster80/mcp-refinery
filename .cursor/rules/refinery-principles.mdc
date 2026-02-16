@@ -1,0 +1,58 @@
+---
+description: Core principles and intent of the MCP Refinery system — must be followed on every change
+alwaysApply: true
+---
+
+# MCP Refinery — System Principles
+
+This system is a governed, self-improving delivery pipeline for MCP servers.
+These principles define its identity and must not be violated.
+
+## Non-negotiable rules
+
+1. **Never bypass alignment gates.** Every pipeline that produces changes includes an `align` overlay. Removing or auto-approving it breaks the system's contract with the user. When `control="user"`, STOP and present the decision.
+
+2. **Always run cleanup after changes.** The `cleanup` overlay exists because every change leaves artifacts (stale imports, dead exports, orphaned types). This is not optional. After modifying any source file, check: unused imports, dead exports, types defined but never used, stale comments, misaligned function signatures.
+
+3. **Eat your own cooking.** The baselines in `src/knowledge/baselines.ts` are patterns this system uses. If you add a pattern, make sure the refinery follows it. If it doesn't, fix the refinery first.
+
+4. **Zero unnecessary dependencies.** Runtime deps are `@modelcontextprotocol/sdk` and `zod`. Do not add more without explicit user approval. Prefer Node.js built-ins. Implement simple utilities inline.
+
+5. **Facade over granularity.** Users interact through `ingest`, `refine`, `consult`, `pipeline_next`, `pipeline_status`. If new functionality requires the user to call internal tools, wrap it in a facade.
+
+6. **Model keys are live.** Never cache API key availability. Check `process.env` on every model selection call. Adding a key must take effect immediately.
+
+7. **Improvements propagate.** When a fix applies universally, tag it for cross-server propagation. Don't fix one server and leave others vulnerable.
+
+## Pipeline overlay order
+
+```
+refine:  research → classify → triage → ALIGN → plan → execute → CLEANUP → release → propagate
+improve: research → triage → ALIGN → plan → execute → CLEANUP
+review:  classify → deliberate → ALIGN
+consult: classify → deliberate → ALIGN
+assess:  research → classify
+audit:   research → classify
+```
+
+`align` appears in every command that leads to changes. `cleanup` appears in every command that executes changes.
+
+## When modifying the orchestrator
+
+- New overlays go in the `OverlayName` type, `OVERLAY_DESCRIPTIONS`, `COMMAND_OVERLAYS`, and the `executeCurrentStep` switch
+- `align` must remain before any overlay that modifies external state
+- `cleanup` must remain after `execute`
+- `propagate` must remain last in any pipeline that produces validated improvements
+
+## When modifying tools
+
+- Facade tools are registered FIRST in `src/tools/index.ts`
+- Every tool response must use the `output()` helper with a `next` block
+- Update the tool count in `build.ps1` summary when adding/removing tools
+- Run `.\build.ps1 -VerifyOnly` to check MCP connection alignment
+
+## When modifying types
+
+- `AuditAction` union must only contain values that are actually used in `recordAudit()` calls
+- After removing a type, grep for it across all `.ts` files to confirm nothing references it
+- After renaming, update all facade `index.ts` re-exports

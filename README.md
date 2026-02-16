@@ -1,0 +1,204 @@
+# MCP Refinery
+
+> **Aliases**: `m-r`, `mr`, `mcp-refinery` — use any of these when talking to Cursor in another repo.
+
+Agentic delivery system for self-improving MCP servers.
+
+Evaluates servers against its own proven patterns. Always asks for alignment before changing anything. Propagates improvements across all managed servers. Zero external dependencies beyond the MCP SDK.
+
+> For full architecture, principles, and diagrams see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
+## Referring to MCP Refinery from Other Repos
+
+When you're in another Cursor project with this MCP server connected, you can say:
+
+```
+Please consult with m-r about this server's error handling
+```
+
+```
+Ask mr to review this with the following research: @research-article.md
+```
+
+```
+Use mcp-refinery to ingest this deep analysis and suggest improvements
+```
+
+Cursor will recognize `m-r` / `mr` / `mcp-refinery` as this MCP server and route to the facade tools automatically.
+
+## Feeding Large Research (50k+ characters)
+
+When you have a long research article from ChatGPT, Gemini, or any source:
+
+**Option A — File reference (recommended for very large content)**
+1. Save the research output to a file in your project (e.g. `research/gemini-deep-dive.md`)
+2. In Cursor, say:
+
+```
+Please consult with m-r using this research: @research/gemini-deep-dive.md
+```
+
+Cursor reads the file and passes the full content to the `ingest` tool automatically.
+
+**Option B — Direct paste (works for moderate length)**
+1. Paste the research directly in your Cursor prompt:
+
+```
+Please have m-r ingest this research and suggest improvements for cursor-context-layer:
+
+<paste your 50k character article here>
+```
+
+The MCP server's `ingest` and `refine` tools both accept raw research content of any length. The system splits analysis across security, reliability, devex, and performance perspectives automatically.
+
+**Option C — Multiple rounds**
+If the research is too large for a single prompt, split it into logical sections and feed them one at a time:
+
+```
+Please have m-r ingest this (part 1 of 3): @research/part1.md
+```
+
+Each round stores findings. The consensus engine merges across all rounds.
+
+## Quick Start
+
+```bash
+npm install
+npm run build && npm run bundle
+```
+
+Add to Cursor MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "mcp-refinery": {
+      "command": "node",
+      "args": ["C:/Projects/V2/mcp-refinery/dist/mcp-refinery.cjs"],
+      "env": {
+        "REFINERY_DATA_PATH": "./data"
+      }
+    }
+  }
+}
+```
+
+API keys are inherited from your system environment. Set `ANTHROPIC_API_KEY` in your shell profile. Add `OPENAI_API_KEY`, `GOOGLE_AI_API_KEY`, or `XAI_API_KEY` later and models become available immediately — no restart needed.
+
+## How to Use
+
+Five facade tools. Start here. Internal tools exist for advanced use.
+
+### Feed in research
+
+```
+Use the ingest tool with target_server_id="my-server" content="<paste article>"
+```
+
+The system reads the article, extracts structured findings across multiple perspectives, evaluates them against baseline quality patterns, computes consensus, and produces proposals.
+
+### Refine a server
+
+```
+Use the refine tool with target_server_id="my-server" intent="improve error handling"
+```
+
+Runs the full pipeline: research, classify, triage, **user alignment**, plan, execute, **cleanup**, release, propagate. If the server is already registered, only `target_server_id` and `intent` are required.
+
+### Consult specialists
+
+```
+Use the consult tool with question="should we migrate to SSE transport?"
+```
+
+Engages the right specialist agents and runs multi-model deliberation for critical decisions.
+
+### Advance a pipeline
+
+```
+Use the pipeline_next tool with pipeline_id="..."
+```
+
+### Check status
+
+```
+Use the pipeline_status tool
+```
+
+## Pipeline
+
+Every pipeline passes through overlays in order. Two overlays are **mandatory gates**:
+
+```
+research → classify → [deliberate] → triage → ALIGN → plan → execute → CLEANUP → release → propagate
+                                                 ▲                          ▲
+                                          user must approve         post-change verification
+```
+
+The **align** gate always pauses for user confirmation before changing anything. The **cleanup** pass always runs after execution to catch stale artifacts.
+
+## Model Routing
+
+The system knows about models from 4 providers but only routes to those with detected API keys:
+
+| Provider | Env var | Models |
+|----------|---------|--------|
+| Anthropic | `ANTHROPIC_API_KEY` | Claude Opus, Sonnet, Haiku |
+| OpenAI | `OPENAI_API_KEY` | GPT-4o, o3, GPT-4o-mini |
+| Google | `GOOGLE_AI_API_KEY` | Gemini Pro, Flash |
+| xAI | `XAI_API_KEY` | Grok 3 |
+
+Keys are checked live on every call — adding a key takes effect immediately.
+
+For critical decisions, two architect-tier models review the same problem (multi-model deliberation). When they disagree, the conflict goes to the user.
+
+## MCP Tools (31)
+
+### Facade (start here)
+
+| Tool | Purpose |
+|------|---------|
+| `ingest` | Feed in a research article |
+| `refine` | Full improvement pipeline |
+| `consult` | Specialist consultation / deliberation |
+| `pipeline_next` | Advance active pipeline |
+| `pipeline_status` | Check pipeline state |
+
+### Internal (advanced)
+
+**Research**: `server_register`, `server_list`, `research_start`, `research_store`, `research_consensus`, `research_query`
+
+**Decision**: `improvements_triage`, `decision_record_adr`, `decision_check_oscillation`, `decision_capture_scorecard`
+
+**Delivery**: `delivery_plan`, `delivery_create_pr`, `delivery_release`, `governance_approve`, `governance_check`
+
+**Routing**: `model_list`, `model_classify`, `deliberation_start`, `deliberation_submit`, `deliberation_resolve`, `deliberation_status`
+
+**Knowledge**: `baselines`, `cleanup_checklist`
+
+**Observability**: `audit_query`, `audit_stats`, `search_similar`
+
+## Storage
+
+All state in `data/` as JSON files. No databases. Delete `data/` to reset.
+
+## Build
+
+```powershell
+.\build.ps1              # Full build + bundle + MCP connection config
+.\build.ps1 -VerifyOnly  # Check bundle + settings alignment only
+```
+
+## Dependencies
+
+**Runtime**: `@modelcontextprotocol/sdk`, `zod`
+**Dev**: `typescript`, `tsx`, `esbuild`
+
+## Documentation
+
+| Document | Audience | Content |
+|----------|----------|---------|
+| [README.md](README.md) | Quick start | Setup, usage, tool reference |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Deep reference | Principles, diagrams, pipeline flow, model routing, governance, evolution rules |
+| `.cursor/rules/refinery-principles.mdc` | AI agents | Non-negotiable rules enforced on every session |
+| `.cursor/rules/mcp-connection-check.mdc` | AI agents | MCP connection alignment on build-affecting changes |

@@ -1,0 +1,85 @@
+---
+description: Enforces MCP server connection alignment on every build/publish-affecting change
+globs: "{src/index.ts,src/server.ts,src/tools/index.ts,package.json,build.mjs,build.ps1,tsconfig.json}"
+alwaysApply: false
+---
+
+# MCP Connection Alignment Check
+
+When any of these files change, the MCP server connection config may need updating.
+
+## What to check
+
+The canonical connection lives in `build.ps1` as `$McpConnection`. It must stay aligned with:
+
+1. **`package.json`** — `name` field drives the server key, `version` drives the reported version
+2. **`src/server.ts`** — `McpServer` constructor `name` and `version` must match `package.json`
+3. **`src/index.ts`** — Transport type (stdio) must match the connection `command`
+4. **`build.mjs`** — Output path `dist/mcp-refinery.cjs` must match the connection `args[0]`
+5. **`src/tools/index.ts`** — Tool count in `build.ps1` summary should match actual count
+6. **`src/server.ts`** — Capabilities block must list all registered capability types
+
+## When to flag
+
+After modifying any of the watched files, verify:
+
+- [ ] `build.ps1` `$McpConnection` args point to the correct bundle path
+- [ ] `package.json` name/version matches `src/server.ts` McpServer constructor
+- [ ] Tool count in `build.ps1` summary matches `grep -c "server.tool(" src/tools/index.ts`
+- [ ] If transport changed (e.g., stdio to HTTP/SSE), connection `command` and `args` must update
+- [ ] If new env vars were added to `src/config.ts`, they should appear in `$McpConnection.env` and `.env.example`
+
+## Quick validation
+
+```powershell
+.\build.ps1 -VerifyOnly
+```
+
+This checks the bundle exists and that any local Cursor MCP settings files are aligned.
+
+## API key handling
+
+The server checks these env vars LIVE on every model selection (not cached at startup):
+
+- `ANTHROPIC_API_KEY` — Claude Opus, Sonnet, Haiku
+- `OPENAI_API_KEY` — GPT-4o, o3, GPT-4o-mini
+- `GOOGLE_AI_API_KEY` — Gemini Pro, Flash
+- `XAI_API_KEY` — Grok 3
+
+Keys are inherited from the parent process environment (your shell profile, system env, or `.env`).
+Do NOT put raw keys in the Cursor MCP JSON config — set them in your environment instead.
+
+When a key is missing, that provider's models run in "prompt" mode (the agent processes them manually).
+When a key is added, models become available immediately on the next tool call — no restart needed.
+
+## Connection block format
+
+Production (bundled):
+```json
+{
+  "mcpServers": {
+    "mcp-refinery": {
+      "command": "node",
+      "args": ["C:/Projects/V2/mcp-refinery/dist/mcp-refinery.cjs"],
+      "env": {
+        "REFINERY_DATA_PATH": "./data"
+      }
+    }
+  }
+}
+```
+
+Dev (source, no build):
+```json
+{
+  "mcpServers": {
+    "mcp-refinery": {
+      "command": "npx",
+      "args": ["tsx", "C:/Projects/V2/mcp-refinery/src/index.ts"],
+      "env": {
+        "REFINERY_DATA_PATH": "./data"
+      }
+    }
+  }
+}
+```
