@@ -24,7 +24,7 @@ import {
   recordAudit,
 } from '../storage/index.js';
 import { triageFindings } from '../decision/index.js';
-import { buildCleanupChecklist, matchFindingsToBaselines } from '../knowledge/index.js';
+import { buildCleanupChecklist, buildImplementationGuide, matchFindingsToBaselines } from '../knowledge/index.js';
 import type { ResearchPerspective } from '../types/index.js';
 import type { TaskClassification } from '../types/index.js';
 import type { RoutingDecision } from '../routing/router.js';
@@ -570,22 +570,23 @@ function executePlanOverlay(pipeline: PipelineState): StepResult {
   const proposals = listProposals(pipeline.target_server_id, 'triaged');
   const ids = proposals.slice(0, 3).map((p) => p.proposal_id);
 
-  return stepResult(pipeline, overlay_label('plan'), `${agents} creating delivery plan.`, 'waiting_agent', {
+  return stepResult(pipeline, overlay_label('plan'), `${agents} creating delivery plan with MCP implementation requirements.`, 'waiting_agent', {
     control: 'agent',
-    description: 'Create a delivery plan for the approved proposals.',
-    bootstrap_prompt: `${agents} building delivery plan.\n\nUse delivery_plan with target_server_id="${pipeline.target_server_id}" proposal_ids=${JSON.stringify(ids)}\n\nThen: pipeline_next with pipeline_id="${pipeline.pipeline_id}"`,
+    description: 'Create a delivery plan that includes MCP tool implementation standards as acceptance criteria.',
+    bootstrap_prompt: `${agents} building delivery plan for ${pipeline.target_server_id}.\n\nUse delivery_plan with target_server_id="${pipeline.target_server_id}" proposal_ids=${JSON.stringify(ids)}\n\n**IMPORTANT**: The delivery plan MUST include these MCP implementation requirements as acceptance criteria for any proposal that creates or modifies tools:\n- All tool parameters have Zod schemas with .describe() annotations\n- All tool descriptions explain: what it does, when to use it, what it returns\n- All tool responses use structured output with next-step guidance (output() helper pattern)\n- All tool handlers have try/catch with structured error recovery\n- All responses use MCP content array format: { content: [{ type: "text", text: "..." }] }\n- Input validation via Zod runs before any business logic\n- No new runtime dependencies without approval\n\nThen: pipeline_next with pipeline_id="${pipeline.pipeline_id}"`,
   });
 }
 
 function executeExecuteOverlay(pipeline: PipelineState): StepResult {
   const agents = engagedNames(pipeline, ['code_smith', 'test_evaluator']);
+  const implGuide = buildImplementationGuide();
   pipeline.status = 'waiting_agent';
   store().update(pipeline.pipeline_id, pipeline);
 
-  return stepResult(pipeline, overlay_label('execute'), `${agents} preparing implementation.`, 'waiting_agent', {
+  return stepResult(pipeline, overlay_label('execute'), `${agents} preparing implementation with MCP quality standards.`, 'waiting_agent', {
     control: 'agent',
-    description: 'Create the PR with the planned changes.',
-    bootstrap_prompt: `${agents} executing delivery plan.\n\nUse delivery_create_pr with the plan details from the previous step.\n\nThen: pipeline_next with pipeline_id="${pipeline.pipeline_id}"`,
+    description: 'Implement the planned changes following MCP tool implementation standards, then create the PR.',
+    bootstrap_prompt: `${agents} executing delivery plan for ${pipeline.target_server_id}.\n\n${implGuide}\n\n**CRITICAL**: All new or modified tools MUST follow the implementation standards above. Any tool that does not meet these standards will be flagged in the cleanup phase.\n\nAfter implementing changes:\n1. Verify every tool has Zod schemas with .describe() on every parameter\n2. Verify every tool has a clear description (what, when, returns)\n3. Verify every tool response uses the output() helper with next-step guidance\n4. Verify every tool handler has try/catch with structured error responses\n5. Use delivery_create_pr with the plan details\n\nThen: pipeline_next with pipeline_id="${pipeline.pipeline_id}"`,
   });
 }
 

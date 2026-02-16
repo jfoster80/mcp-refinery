@@ -185,7 +185,7 @@ export function registerTools(server: McpServer): void {
       if (args.findings) input.findings = args.findings;
 
       const result = advancePipeline(args.pipeline_id, Object.keys(input).length > 0 ? input : undefined);
-      if (!result) return output({ status: 'error', data: {}, message: 'Pipeline not found.', next: null });
+      if (!result) return output({ status: 'error', data: {}, message: 'Pipeline not found.', next: { control: 'user', description: 'The pipeline ID was not found. Check the ID or start a new pipeline.', bootstrap_prompt: `Pipeline "${args.pipeline_id}" does not exist. Use pipeline_status to find active pipelines, or use refine to start a new one.` } });
 
       return output({
         status: result.status === 'completed' ? 'success' : result.status === 'waiting_user' ? 'needs_approval' : 'success',
@@ -434,7 +434,11 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
         status: 'success',
         data: { feeds_count: feeds.length, feeds: feeds.map((f) => ({ feed_id: f.feed_id, perspective: f.perspective, findings: f.findings.length, confidence: f.confidence })), latest_consensus: consensus },
         message: `${feeds.length} research feed(s) found.`,
-        next: null,
+        next: consensus
+          ? { control: 'agent', description: 'Research data retrieved. You can triage findings or start a new research cycle.', bootstrap_prompt: `Research data for "${args.target_server_id}" is available. To triage into proposals, use improvements_triage with target_server_id="${args.target_server_id}". To view consensus details, check the latest_consensus field above.` }
+          : feeds.length > 0
+            ? { control: 'agent', description: 'Feeds exist but no consensus yet. Compute consensus to proceed.', bootstrap_prompt: `${feeds.length} research feed(s) found but no consensus computed yet. Use research_consensus with target_server_id="${args.target_server_id}" to compute cross-perspective agreement.` }
+            : { control: 'agent', description: 'No research data yet. Start research to begin.', bootstrap_prompt: `No research data found for "${args.target_server_id}". Use research_start with target_server_id="${args.target_server_id}" to begin analysis.` },
       });
     },
   );
@@ -478,10 +482,13 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
     },
     async (args) => {
       const adr = createADR({ ...args, related_proposals: args.related_proposals ?? [] });
+      const relatedIds = args.related_proposals ?? [];
       return output({
         status: 'success', data: { adr_id: adr.adr_id },
         message: `ADR "${adr.title}" recorded with ${(adr.confidence * 100).toFixed(0)}% confidence.`,
-        next: { control: 'agent', description: 'ADR is now active. Continue with delivery.', bootstrap_prompt: `ADR ${adr.adr_id} is now binding. Proceed with the next step in the delivery pipeline.` },
+        next: relatedIds.length > 0
+          ? { control: 'agent', description: 'ADR recorded. Create a delivery plan for the related proposals.', bootstrap_prompt: `ADR ${adr.adr_id} is now binding. Create a delivery plan using delivery_plan with proposal_ids=${JSON.stringify(relatedIds)}.` }
+          : { control: 'user', description: 'ADR recorded. What would you like to do next?', bootstrap_prompt: `ADR "${adr.title}" (${adr.adr_id}) is now binding with a ${(adr.confidence * 100).toFixed(0)}% confidence level. This decision is protected by anti-oscillation cooldown.\n\nWhat would you like to do next?\n- Use improvements_triage to generate proposals based on this decision\n- Use refine to start a full improvement pipeline\n- Use delivery_plan to create a delivery plan for existing proposals` },
       });
     },
   );
@@ -492,14 +499,16 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
     { proposal_id: z.string(), new_confidence: z.number().min(0).max(1) },
     async (args) => {
       const proposal = getProposal(args.proposal_id);
-      if (!proposal) return output({ status: 'error', data: {}, message: 'Proposal not found.', next: null });
+      if (!proposal) return output({ status: 'error', data: {}, message: 'Proposal not found.', next: { control: 'user', description: 'Proposal ID not found. Check the ID and try again.', bootstrap_prompt: `Proposal "${args.proposal_id}" was not found. Use improvements_triage to view current proposals, or use research_query to check the research state.` } });
       const check = checkOscillation(proposal, args.new_confidence);
       const stability = computeStabilityScore(proposal.target_server_id);
       return output({
         status: check.blocked ? 'error' : 'success',
         data: { oscillation_check: check, stability },
         message: check.blocked ? `Blocked: ${check.reason}` : 'No oscillation conflict.',
-        next: null,
+        next: check.blocked
+          ? { control: 'user', description: 'This proposal is blocked by anti-oscillation rules. Review the reason and decide how to proceed.', bootstrap_prompt: `Proposal "${args.proposal_id}" is blocked: ${check.reason}\n\nOptions:\n- Wait for the cooldown period to expire (${Math.ceil(check.cooldown_remaining_ms / 3600000)}h remaining)\n- Record a new ADR with higher confidence using decision_record_adr to supersede the existing decision\n- Choose a different proposal that is not in conflict` }
+          : { control: 'agent', description: 'No oscillation conflict. This proposal can proceed.', bootstrap_prompt: `Proposal "${args.proposal_id}" passed oscillation checks. Proceed with governance_approve to approve it, then delivery_plan to create the implementation plan.` },
       });
     },
   );
@@ -520,10 +529,13 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
       const baseline = getBaseline(args.target_server_id);
       let comparison = null;
       if (baseline && baseline.scorecard_id !== snapshot.scorecard_id) comparison = compareScorecards(baseline, snapshot);
+      const improved = comparison && comparison.overall_delta > 0;
       return output({
         status: 'success', data: { scorecard_id: snapshot.scorecard_id, overall_score: snapshot.overall_score, comparison },
-        message: `Scorecard captured: ${(snapshot.overall_score * 100).toFixed(1)}% overall.`,
-        next: { control: 'agent', description: 'Scorecard recorded. Continue pipeline.', bootstrap_prompt: `Scorecard ${snapshot.scorecard_id} captured. Proceed with the next pipeline step.` },
+        message: `Scorecard captured: ${(snapshot.overall_score * 100).toFixed(1)}% overall.${comparison ? ` Delta: ${comparison.overall_delta > 0 ? '+' : ''}${(comparison.overall_delta * 100).toFixed(1)}%` : ' (first capture — no baseline to compare)'}`,
+        next: comparison
+          ? { control: improved ? 'agent' : 'user', description: improved ? 'Scorecard shows improvement. Pipeline can continue.' : 'Scorecard regression detected. Review before proceeding.', bootstrap_prompt: improved ? `Scorecard ${snapshot.scorecard_id} shows improvement (${(comparison.overall_delta * 100).toFixed(1)}% delta). The pipeline can continue — use pipeline_next or delivery_release as appropriate.` : `Scorecard ${snapshot.scorecard_id} shows regression (${(comparison.overall_delta * 100).toFixed(1)}% delta). Review the dimension breakdowns above.\n\nDo you want to proceed despite the regression, or should we investigate the cause?` }
+          : { control: 'agent', description: 'Baseline scorecard captured. Continue with the pipeline.', bootstrap_prompt: `Baseline scorecard ${snapshot.scorecard_id} captured (${(snapshot.overall_score * 100).toFixed(1)}% overall). This is the first capture for "${args.target_server_id}" — it will be used as the comparison baseline for future scorecards. Continue with the pipeline.` },
       });
     },
   );
@@ -545,7 +557,7 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           message: `Delivery plan created (${plan.estimated_duration_hours}h est).`,
           next: { control: 'agent', description: 'Create a PR record for this plan.', bootstrap_prompt: `Use delivery_create_pr with plan_id="${plan.plan_id}" proposal_ids=${JSON.stringify(args.proposal_ids)} repo_url="<repo_url>" changes_summary="<describe changes>"` },
         });
-      } catch (e: unknown) { return output({ status: 'error', data: {}, message: String(e), next: null }); }
+      } catch (e: unknown) { return output({ status: 'error', data: { error: String(e) }, message: `Delivery plan failed: ${e instanceof Error ? e.message : String(e)}`, next: { control: 'user', description: 'Delivery plan creation failed. Review the error and try again.', bootstrap_prompt: `Delivery plan creation failed: ${e instanceof Error ? e.message : String(e)}\n\nCommon causes:\n- Invalid proposal IDs (use improvements_triage to see current proposals)\n- No approved proposals found\n\nFix the issue and retry delivery_plan with corrected parameters.` } }); }
     },
   );
 
@@ -575,7 +587,7 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           message: `Release v${release.version} created.`,
           next: { control: 'user', description: 'Publish the release.', bootstrap_prompt: `Release v${release.version} is ready. Publish to your registry and deploy.\n\nThe MCP Refinery pipeline is complete. To start a new improvement cycle, use research_start again.` },
         });
-      } catch (e: unknown) { return output({ status: 'error', data: {}, message: String(e), next: null }); }
+      } catch (e: unknown) { return output({ status: 'error', data: { error: String(e) }, message: `Release failed: ${e instanceof Error ? e.message : String(e)}`, next: { control: 'user', description: 'Release creation failed. Review the error and decide how to proceed.', bootstrap_prompt: `Release creation failed: ${e instanceof Error ? e.message : String(e)}\n\nVerify the plan_id and pr_ids are correct, then retry delivery_release. Or use pipeline_status to check the current pipeline state.` } }); }
     },
   );
 
@@ -607,7 +619,9 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
         status: result.allowed ? 'success' : 'needs_approval',
         data: result,
         message: result.reason,
-        next: result.allowed ? null : { control: 'user', description: 'Approval required.', bootstrap_prompt: `Use governance_approve with target_type="${args.target_type}" target_id="${args.target_id}" approved_by="<your_name>" risk_acknowledged=true rollback_plan_acknowledged=true` },
+        next: result.allowed
+          ? { control: 'agent', description: 'Governance gate passed. Proceed with the next pipeline step.', bootstrap_prompt: `Governance check passed for ${args.target_type} "${args.target_id}". No additional approval needed. Continue with the next step — use delivery_plan or pipeline_next as appropriate.` }
+          : { control: 'user', description: 'Approval required before proceeding.', bootstrap_prompt: `Governance gate requires approval for this ${args.risk_level}-risk ${args.target_type}.\n\nTo approve: use governance_approve with target_type="${args.target_type}" target_id="${args.target_id}" approved_by="<your_name>" risk_acknowledged=true rollback_plan_acknowledged=true` },
       });
     },
   );
@@ -618,16 +632,16 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
 
   server.tool('audit_query', 'Query the append-only audit log.', { action: z.string().optional(), target_type: z.string().optional(), target_id: z.string().optional(), since: z.string().optional(), limit: z.number().optional() }, async (args) => {
     const entries = queryAuditLog(args as Parameters<typeof queryAuditLog>[0]);
-    return output({ status: 'success', data: { count: entries.length, entries }, message: `${entries.length} audit entries.`, next: null });
+    return output({ status: 'success', data: { count: entries.length, entries }, message: `${entries.length} audit entries.`, next: { control: 'user', description: 'Audit log retrieved. Review the entries above.', bootstrap_prompt: `${entries.length} audit entries returned. You can refine the query with filters (action, target_type, target_id, since) or use search_similar to find related historical decisions.` } });
   });
 
   server.tool('audit_stats', 'Get audit log statistics.', {}, async () => {
-    return output({ status: 'success', data: { audit: getAuditStats(), vectors: getVectorStats() }, message: 'Stats retrieved.', next: null });
+    return output({ status: 'success', data: { audit: getAuditStats(), vectors: getVectorStats() }, message: 'Stats retrieved.', next: { control: 'user', description: 'Audit statistics retrieved. Review the data above.', bootstrap_prompt: 'Audit and vector store statistics are above. Use audit_query with specific filters to drill into entries, or search_similar to find patterns in historical decisions.' } });
   });
 
   server.tool('search_similar', 'Vector similarity search on historical decisions/fixes.', { query: z.string(), top_k: z.number().optional() }, async (args) => {
     const results = findSimilarDecisions(args.query, args.top_k ?? 5);
-    return output({ status: 'success', data: { results: results.map((r) => ({ id: r.entry.vector_id, similarity: r.similarity, text: r.entry.content_text.slice(0, 200), metadata: r.entry.metadata })) }, message: `${results.length} similar items found.`, next: null });
+    return output({ status: 'success', data: { results: results.map((r) => ({ id: r.entry.vector_id, similarity: r.similarity, text: r.entry.content_text.slice(0, 200), metadata: r.entry.metadata })) }, message: `${results.length} similar items found.`, next: { control: 'user', description: 'Similar historical decisions retrieved. Review for relevant patterns.', bootstrap_prompt: `${results.length} similar historical item(s) found for "${args.query}". Review the results above to inform your current decision. Use decision_check_oscillation to verify a proposal won't conflict with past decisions, or decision_record_adr to record a new binding decision.` } });
   });
 
   // =========================================================================
@@ -715,7 +729,7 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           description: `Proceed with ${primary.model.display_name}.`,
           bootstrap_prompt: primary.mode === 'prompt'
             ? `${modelSwitchInstruction(primary.model, true)}\nSwitch your Cursor model to ${primary.model.display_name} for this task, then continue.`
-            : `Proceeding with ${primary.model.display_name} via direct API call.`,
+            : `Task classified as ${classification.complexity}. Routed to ${primary.model.display_name} (${primary.model.tier} tier) via API. The Cursor agent should proceed with the task — use refine, consult, or the appropriate tool for your intent.`,
         },
       });
     },
@@ -782,8 +796,8 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
             message: `CONSENSUS reached (${(analysis.overall_agreement * 100).toFixed(0)}% agreement). Both models align.`,
             next: {
               control: 'agent',
-              description: 'Consensus achieved. Proceed with the agreed approach.',
-              bootstrap_prompt: `Multi-model consensus reached on session ${session.session_id}.\nAgreed approach: ${analysis.agreed_points.slice(0, 3).join('; ')}\n\nProceed with the pipeline — use improvements_triage or delivery_plan as appropriate.`,
+              description: 'Consensus achieved. Record the decision and proceed.',
+              bootstrap_prompt: `Multi-model consensus reached on session ${session.session_id} (${(analysis.overall_agreement * 100).toFixed(0)}% agreement).\nAgreed approach: ${analysis.agreed_points.slice(0, 3).join('; ')}\n\nRecord this consensus as an ADR using decision_record_adr with the agreed points, then use improvements_triage to generate proposals, or use pipeline_next if inside an active pipeline.`,
             },
           });
         }
@@ -811,10 +825,10 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           status: 'success',
           data: { session_id: session.session_id },
           message: 'Deliberation started, awaiting responses.',
-          next: null,
+          next: { control: 'agent', description: 'Deliberation started. Check status or wait for API responses.', bootstrap_prompt: `Deliberation session ${session.session_id} started. Use deliberation_status with session_id="${session.session_id}" to check progress, or wait for model responses to arrive.` },
         });
       } catch (e: unknown) {
-        return output({ status: 'error', data: { error: String(e) }, message: `Deliberation failed: ${e}`, next: null });
+        return output({ status: 'error', data: { error: String(e) }, message: `Deliberation failed: ${e instanceof Error ? e.message : String(e)}`, next: { control: 'user', description: 'Deliberation failed. Review the error and try again.', bootstrap_prompt: `Deliberation failed: ${e instanceof Error ? e.message : String(e)}\n\nCommon causes:\n- No models available (check model_list for available models)\n- Invalid model IDs specified\n\nFix the issue and retry deliberation_start, or proceed without deliberation using improvements_triage directly.` } });
       }
     },
   );
@@ -835,7 +849,7 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
         args.session_id, args.model_id, args.response,
         args.confidence, args.key_points, args.risks,
       );
-      if (!session) return output({ status: 'error', data: {}, message: 'Session not found.', next: null });
+      if (!session) return output({ status: 'error', data: {}, message: 'Session not found.', next: { control: 'user', description: 'Deliberation session not found. Check the session ID.', bootstrap_prompt: `Session "${args.session_id}" was not found. Use deliberation_start to create a new session, or check your session ID.` } });
 
       const remaining = session.models_assigned.filter(
         (m) => !session.responses.some((r) => r.model_id === m),
@@ -882,8 +896,8 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
         message: `CONSENSUS: ${(analysis.overall_agreement * 100).toFixed(0)}% agreement.`,
         next: {
           control: 'agent',
-          description: 'Consensus achieved. Continue pipeline.',
-          bootstrap_prompt: `Multi-model consensus on ${session.session_id}. Proceed with the agreed recommendations.`,
+          description: 'Consensus achieved. Record the decision and continue.',
+          bootstrap_prompt: `Multi-model consensus on session ${session.session_id} (${(analysis.overall_agreement * 100).toFixed(0)}% agreement).\n\nSynthesis: ${analysis.synthesis}\n\nRecord this as an ADR using decision_record_adr, then use improvements_triage to generate proposals, or use pipeline_next if inside an active pipeline.`,
         },
       });
     },
@@ -899,7 +913,7 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
     },
     async (args) => {
       const session = resolveDeliberation(args.session_id, args.resolution, args.chosen_model);
-      if (!session) return output({ status: 'error', data: {}, message: 'Session not found.', next: null });
+      if (!session) return output({ status: 'error', data: {}, message: 'Session not found.', next: { control: 'user', description: 'Deliberation session not found. Check the session ID.', bootstrap_prompt: `Session "${args.session_id}" was not found. Use deliberation_start to create a new session, or verify the session ID.` } });
 
       return output({
         status: 'success',
@@ -920,7 +934,9 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
     { session_id: z.string() },
     async (args) => {
       const session = getDeliberation(args.session_id);
-      if (!session) return output({ status: 'error', data: {}, message: 'Session not found.', next: null });
+      if (!session) return output({ status: 'error', data: {}, message: 'Session not found.', next: { control: 'user', description: 'Session not found. Check the session ID.', bootstrap_prompt: `Session "${args.session_id}" was not found. Use deliberation_start to create a new session.` } });
+      const remaining = session.models_assigned.filter((m) => !session.responses.some((r) => r.model_id === m));
+      const hasConflicts = session.agreement_analysis?.conflicting_points.some((c) => c.requires_user_decision) ?? false;
       return output({
         status: 'success',
         data: {
@@ -932,7 +948,11 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           conflicts: session.agreement_analysis?.conflicting_points.length ?? 0,
         },
         message: `Session ${session.resolution}: ${session.responses.length}/${session.models_assigned.length} responses.`,
-        next: null,
+        next: session.resolution === 'pending' && remaining.length > 0
+          ? { control: 'user', description: `${remaining.length} model response(s) still pending.`, bootstrap_prompt: `Session ${session.session_id} is waiting for responses from: ${remaining.join(', ')}.\n\nSubmit responses using deliberation_submit with session_id="${session.session_id}" model_id="<model>" response="<response>".` }
+          : session.resolution === 'pending' && hasConflicts
+            ? { control: 'user', description: 'Models disagree. Your decision is needed.', bootstrap_prompt: `Session ${session.session_id} has conflicting positions that require your decision. Use deliberation_resolve with session_id="${session.session_id}" resolution="<your decision>".` }
+            : { control: 'user', description: 'Deliberation status retrieved.', bootstrap_prompt: `Session ${session.session_id} status: ${session.resolution}. ${session.agreement_analysis ? `Agreement: ${(session.agreement_analysis.overall_agreement * 100).toFixed(0)}%.` : ''}\n\nUse pipeline_next to continue an active pipeline, or use the deliberation results to inform your next action.` },
       });
     },
   );
@@ -964,7 +984,7 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           })),
         },
         message: `${patterns.length} baseline pattern(s) for category "${cat}".`,
-        next: null,
+        next: { control: 'user', description: 'Baseline patterns retrieved. Use these to evaluate servers or guide implementation.', bootstrap_prompt: `${patterns.length} baseline quality patterns displayed. These are the standards the refinery evaluates servers against.\n\nTo evaluate a server against these patterns: use refine with the target_server_id.\nTo see all categories: use baselines with category="all".\nTo see the implementation guide for building tools to these standards: use cleanup_checklist.` },
       });
     },
   );
