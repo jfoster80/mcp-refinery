@@ -44,6 +44,10 @@ produce code changes as one of its outputs.
    scorecards) prevents the system from ping-ponging between contradictory
    changes. Every change must demonstrably improve on the previous state.
 
+6. **Self-improving.** The refinery can improve itself using the exact same
+   pipeline it applies to other servers. One executable, one MCP connection,
+   no settings changes. Use `target_server_id="self"` from any workspace.
+
 ---
 
 ## 2. Architecture Overview
@@ -215,6 +219,34 @@ Not every command runs the full pipeline:
 
 **Note:** `align` appears in every command that leads to changes. This is intentional
 and must not be removed.
+
+### Self-improvement mode
+
+The refinery registers itself as `target_server_id="self"` on startup. When the
+user targets "self" (or aliases "mr", "m-r", "mcp-refinery"), the orchestrator
+auto-injects the refinery's own source path, tool names, and context. The
+pipeline is otherwise identical — same overlays, same alignment gates, same
+cleanup passes.
+
+```
+User (from ANY workspace):
+  "Have m-r improve itself based on this research"
+          │
+          ▼
+  normalizeSelfTarget()
+    ├── Canonicalize target to "self"
+    ├── Auto-inject source_path from config
+    ├── Auto-inject 31 tool names
+    └── Add self-improvement context note
+          │
+          ▼
+  Same pipeline as any other target:
+  research → classify → triage → ALIGN → plan → execute → CLEANUP → release → propagate
+```
+
+The only difference between self-improvement and improving another server is
+**where the context comes from**: auto-injected for "self", agent-provided for
+others. Everything else — governance, routing, deliberation — is identical.
 
 ---
 
@@ -439,12 +471,17 @@ src/ (42 TypeScript files)
       "command": "node",
       "args": ["C:/Projects/V2/mcp-refinery/dist/mcp-refinery.cjs"],
       "env": {
-        "REFINERY_DATA_PATH": "./data"
+        "REFINERY_DATA_PATH": "./data",
+        "REFINERY_SOURCE_PATH": "C:/Projects/V2/mcp-refinery"
       }
     }
   }
 }
 ```
+
+- `REFINERY_DATA_PATH` — where pipeline state and audit logs are stored
+- `REFINERY_SOURCE_PATH` — the refinery's own source root, used for self-improvement
+  from other workspaces (optional; auto-detected when running from the project dir)
 
 API keys are inherited from the system environment. Set `ANTHROPIC_API_KEY` in
 your shell profile. The server detects it live — no restart needed when keys change.

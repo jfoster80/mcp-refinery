@@ -2,7 +2,7 @@
  * MCP Tool registrations.
  *
  * TOOL HIERARCHY:
- *   1. FACADE TOOLS (refine, consult, pipeline_next, pipeline_status)
+ *   1. FACADE TOOLS (refine, consult, ingest, pipeline_next, pipeline_status)
  *      → Primary interface. The agent calls these. They orchestrate everything.
  *   2. INTERNAL TOOLS (research_*, decision_*, delivery_*, model_*, deliberation_*)
  *      → Available for fine-grained control but agents shouldn't need them directly.
@@ -62,9 +62,9 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     'refine',
-    'Start a full improvement pipeline for an MCP server. Automatically engages the right agents, selects models, and sequences overlays. If the server is already registered, only target_server_id and intent are required. You can also pass a research article to fuel the analysis.',
+    'Start a full improvement pipeline for an MCP server — or the refinery itself. Automatically engages the right agents, selects models, and sequences overlays. Use target_server_id="self" (or "mr", "m-r", "mcp-refinery") to improve the refinery itself from any workspace. If the server is already registered, only target_server_id and intent are required. You can also pass a research article to fuel the analysis.',
     {
-      target_server_id: z.string().describe('Unique server ID (use an existing one or create a new registration)'),
+      target_server_id: z.string().describe('Unique server ID. Use "self" (or "mr", "m-r") to improve the refinery itself.'),
       intent: z.string().describe('What to do: "full refinement", "security audit", "improve performance", etc.'),
       server_name: z.string().optional().describe('Human-readable server name (only needed for first registration)'),
       repo_url: z.string().optional().describe('Git repo URL (only needed for first registration)'),
@@ -104,12 +104,12 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     'consult',
-    'Ask the specialist agents to deliberate on a topic. Provide a question, a research article, or both. Engages the right experts (Architecture, Security, etc.) and uses multi-model deliberation for critical decisions. This is the entry point when you have external research to feed in.',
+    'Ask the specialist agents to deliberate on a topic. Provide a question, a research article, or both. Engages the right experts (Architecture, Security, etc.) and uses multi-model deliberation for critical decisions. Use target_server_id="self" to consult about improving the refinery itself.',
     {
       question: z.string().describe('The question or problem to consult on'),
       context: z.string().optional().describe('Background context'),
       research_content: z.string().optional().describe('Raw research article or deep analysis to use as input. When provided, the agents extract structured findings from this content before deliberating.'),
-      target_server_id: z.string().optional().describe('Server this relates to (if any)'),
+      target_server_id: z.string().optional().describe('Server this relates to. Use "self" (or "mr", "m-r") for self-improvement.'),
       force_multi_model: z.boolean().optional().describe('Force multi-model deliberation (two architects)'),
     },
     async (args) => {
@@ -140,9 +140,9 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     'ingest',
-    'Feed a raw research article, deep analysis, or any external content directly into the refinery. The system extracts structured findings, runs consensus, and produces actionable proposals. Use this when someone gives you a long article and says "use this to improve the server."',
+    'Feed a raw research article, deep analysis, or any external content directly into the refinery. The system extracts structured findings, runs consensus, and produces actionable proposals. Use target_server_id="self" to ingest research for improving the refinery itself.',
     {
-      target_server_id: z.string().describe('Which server this research applies to'),
+      target_server_id: z.string().describe('Which server this research applies to. Use "self" (or "mr", "m-r") for self-improvement.'),
       content: z.string().describe('The raw research article, analysis, or deep dive content'),
       intent: z.string().optional().describe('What to do with the findings — defaults to "improve based on research"'),
     },

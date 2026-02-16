@@ -7,8 +7,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerTools } from './tools/index.js';
 import { registerResources } from './resources/index.js';
 import { registerPrompts } from './prompts/index.js';
-import { loadConfig } from './config.js';
-import { initDatabase } from './storage/database.js';
+import { loadConfig, getConfig } from './config.js';
+import { initDatabase, upsertTargetServer, getTargetServer } from './storage/database.js';
 
 const SERVER_INSTRUCTIONS = `MCP Refinery (aliases: "m-r", "mr") is an agentic delivery system for improving MCP servers. It evaluates servers against proven architectural patterns from its own design, and ensures every change goes through user alignment before execution.
 
@@ -46,6 +46,15 @@ Every pipeline passes through these stages in order:
 9. **Release** — Semantic versioning
 10. **Propagate** — Checks if improvements apply to other managed servers
 
+## Self-improvement
+
+The refinery can improve itself. When the user says "improve yourself", "refine yourself", "improve m-r", or any variation:
+- Use \`target_server_id="self"\` (or "mr", "m-r", "mcp-refinery") — they all resolve to the refinery's own codebase
+- The refinery auto-registers itself on startup with server_id="self"
+- Self-improvement uses the exact same pipeline, alignment gates, and cleanup passes as improving any other server
+- The refinery's own source path and tool list are auto-injected as context — no manual configuration needed
+- From ANY workspace, you can say "have m-r improve itself" and it works
+
 ## Critical rules
 
 - ALWAYS pause at the **align** overlay — show the user what will change and wait for approval
@@ -57,14 +66,37 @@ Every pipeline passes through these stages in order:
 
 ## Do NOT use the internal tools directly unless you have a specific reason. The facade tools handle orchestration.`;
 
+/** Self-register the refinery as target_server_id="self" so it can improve itself. */
+function registerSelf(): void {
+  if (getTargetServer('self')) return;
+  const config = getConfig();
+  const now = new Date().toISOString();
+  upsertTargetServer({
+    server_id: 'self',
+    name: 'MCP Refinery',
+    repo_url: config.storage.source_path ? `file://${config.storage.source_path}` : 'https://github.com/jfoster80/mcp-refinery',
+    branch: 'main',
+    transport: 'stdio',
+    auth_mode: 'none',
+    autonomy_level: 'pr_only',
+    change_budget_per_window: 5,
+    window_hours: 24,
+    allowed_categories: [],
+    scorecard_weights: { security: 0.3, reliability: 0.25, devex: 0.2, performance: 0.15, governance: 0.1 },
+    created_at: now,
+    updated_at: now,
+  });
+}
+
 export function createServer(): McpServer {
   loadConfig();
   initDatabase();
+  registerSelf();
 
   const server = new McpServer(
     {
       name: 'mcp-refinery',
-      version: '0.1.0',
+      version: '0.2.0',
     },
     {
       capabilities: { tools: {}, resources: {}, prompts: {}, logging: {} },

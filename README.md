@@ -60,6 +60,30 @@ Please have m-r ingest this (part 1 of 3): @research/part1.md
 
 Each round stores findings. The consensus engine merges across all rounds.
 
+## Self-Improvement
+
+The refinery can improve itself using the same pipeline it uses for other servers. No settings changes, no workspace switching, one executable.
+
+**From any workspace** (e.g. while working on `cursor-context-layer`):
+
+```
+Please have m-r improve itself based on this research: @article.md
+```
+
+```
+Use the refine tool with target_server_id="self" intent="improve error handling"
+```
+
+**From the mcp-refinery workspace**:
+
+```
+Please refine self — focus on cleanup hygiene
+```
+
+All self-improvement goes through the same alignment gates. The refinery's own source path and tool list are auto-injected as context. The only difference between self-improvement and improving another server is where the context comes from — auto-injected for "self", agent-provided for others.
+
+`target_server_id` accepts any of: `"self"`, `"mr"`, `"m-r"`, `"mcp-refinery"` — they all resolve to the refinery's own codebase.
+
 ## Quick Start
 
 ```bash
@@ -76,12 +100,16 @@ Add to Cursor MCP settings:
       "command": "node",
       "args": ["C:/Projects/V2/mcp-refinery/dist/mcp-refinery.cjs"],
       "env": {
-        "REFINERY_DATA_PATH": "./data"
+        "REFINERY_DATA_PATH": "./data",
+        "REFINERY_SOURCE_PATH": "C:/Projects/V2/mcp-refinery"
       }
     }
   }
 }
 ```
+
+- `REFINERY_DATA_PATH` — where pipeline state and audit logs are stored (default: `./data`)
+- `REFINERY_SOURCE_PATH` — the refinery's own source root, used for self-improvement from other workspaces (optional; auto-detected when running from the project directory)
 
 API keys are inherited from your system environment. Set `ANTHROPIC_API_KEY` in your shell profile. Add `OPENAI_API_KEY`, `GOOGLE_AI_API_KEY`, or `XAI_API_KEY` later and models become available immediately — no restart needed.
 

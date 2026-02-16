@@ -31,7 +31,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot   = $PSScriptRoot
 $PackageJson   = Get-Content "$ProjectRoot\package.json" -Raw | ConvertFrom-Json
 $ServerName    = $PackageJson.name            # "mcp-refinery"
-$ServerVersion = $PackageJson.version         # "0.1.0"
+$ServerVersion = $PackageJson.version         # reads from package.json
 $BundlePath    = "$ProjectRoot\dist\mcp-refinery.cjs"
 $DevEntryPoint = "$ProjectRoot\src\index.ts"
 
@@ -42,12 +42,17 @@ $DevEntryPoint = "$ProjectRoot\src\index.ts"
 # Only include keys you actually have. Remove the rest; the server handles missing keys gracefully.
 #
 # Current setup: Anthropic only. Uncomment others when keys become available.
+#
+# REFINERY_SOURCE_PATH (optional): Set this if you want self-improvement mode
+# to resolve the refinery's source path when running from another workspace.
+# If unset, the server infers from module location or falls back to the GitHub URL.
 $McpConnection = @{
     $ServerName = @{
         command = "node"
         args    = @($BundlePath.Replace('\', '/'))
         env     = @{
-            REFINERY_DATA_PATH = "./data"
+            REFINERY_DATA_PATH   = "./data"
+            REFINERY_SOURCE_PATH = $ProjectRoot.Replace('\', '/')
         }
     }
 }
@@ -58,7 +63,8 @@ $McpConnectionDev = @{
         command = "npx"
         args    = @("tsx", $DevEntryPoint.Replace('\', '/'))
         env     = @{
-            REFINERY_DATA_PATH = "./data"
+            REFINERY_DATA_PATH   = "./data"
+            REFINERY_SOURCE_PATH = $ProjectRoot.Replace('\', '/')
         }
     }
 }
@@ -74,7 +80,8 @@ $CursorJsonBlock = @"
       "command": "node",
       "args": ["$($BundlePath.Replace('\', '/'))"],
       "env": {
-        "REFINERY_DATA_PATH": "./data"
+        "REFINERY_DATA_PATH": "./data",
+        "REFINERY_SOURCE_PATH": "$($ProjectRoot.Replace('\', '/'))"
       }
     }
   }

@@ -5,12 +5,30 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { RefineryConfig } from './types/index.js';
 
 function resolveDataPath(): string {
   if (process.env.REFINERY_DATA_PATH) return resolve(process.env.REFINERY_DATA_PATH);
   return resolve(process.cwd(), 'data');
+}
+
+/**
+ * Resolve the refinery's own source/project root.
+ * Priority: REFINERY_SOURCE_PATH env > infer from module location.
+ */
+function resolveSourcePath(): string {
+  if (process.env.REFINERY_SOURCE_PATH) return resolve(process.env.REFINERY_SOURCE_PATH);
+  try {
+    // In ESM dev mode, resolve from this file's location (src/config.ts -> project root)
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const candidate = resolve(thisDir, '..');
+    if (existsSync(resolve(candidate, 'package.json'))) return candidate;
+  } catch { /* bundled CJS — import.meta.url may not work */ }
+  // Fallback: look for package.json relative to cwd
+  if (existsSync(resolve(process.cwd(), 'package.json'))) return process.cwd();
+  return '';
 }
 
 const DEFAULT_CONFIG: RefineryConfig = {
@@ -25,6 +43,7 @@ const DEFAULT_CONFIG: RefineryConfig = {
   },
   storage: {
     base_path: resolveDataPath(),
+    source_path: resolveSourcePath(),
   },
   routing: {
     multi_model_threshold: 'critical',
@@ -50,11 +69,11 @@ export function loadConfig(configPath?: string): RefineryConfig {
       try {
         const raw = readFileSync(p, 'utf-8');
         const file = JSON.parse(raw);
-      _config = {
-        defaults: { ...DEFAULT_CONFIG.defaults, ...(file.defaults ?? {}) },
-        storage: { ...DEFAULT_CONFIG.storage, ...(file.storage ?? {}) },
-        routing: { ...DEFAULT_CONFIG.routing, ...(file.routing ?? {}) },
-      };
+        _config = {
+          defaults: { ...DEFAULT_CONFIG.defaults, ...(file.defaults ?? {}) },
+          storage: { ...DEFAULT_CONFIG.storage, ...(file.storage ?? {}) },
+          routing: { ...DEFAULT_CONFIG.routing, ...(file.routing ?? {}) },
+        };
         return _config;
       } catch { /* fall through */ }
     }

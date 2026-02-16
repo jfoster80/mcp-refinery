@@ -27,7 +27,8 @@ After modifying any of the watched files, verify:
 - [ ] `package.json` name/version matches `src/server.ts` McpServer constructor
 - [ ] Tool count in `build.ps1` summary matches `grep -c "server.tool(" src/tools/index.ts`
 - [ ] If transport changed (e.g., stdio to HTTP/SSE), connection `command` and `args` must update
-- [ ] If new env vars were added to `src/config.ts`, they should appear in `$McpConnection.env` and `.env.example`
+- [ ] If new env vars were added to `src/config.ts`, they should appear in `$McpConnection.env`
+- [ ] `REFINERY_SOURCE_PATH` in connection config points to the project root (enables self-improvement from other workspaces)
 
 ## Quick validation
 
@@ -62,7 +63,8 @@ Production (bundled):
       "command": "node",
       "args": ["C:/Projects/V2/mcp-refinery/dist/mcp-refinery.cjs"],
       "env": {
-        "REFINERY_DATA_PATH": "./data"
+        "REFINERY_DATA_PATH": "./data",
+        "REFINERY_SOURCE_PATH": "C:/Projects/V2/mcp-refinery"
       }
     }
   }
@@ -77,7 +79,8 @@ Dev (source, no build):
       "command": "npx",
       "args": ["tsx", "C:/Projects/V2/mcp-refinery/src/index.ts"],
       "env": {
-        "REFINERY_DATA_PATH": "./data"
+        "REFINERY_DATA_PATH": "./data",
+        "REFINERY_SOURCE_PATH": "C:/Projects/V2/mcp-refinery"
       }
     }
   }

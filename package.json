@@ -1,6 +1,6 @@
 {
   "name": "mcp-refinery",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agentic delivery system for self-improving MCP servers — zero external dependencies beyond MCP SDK",
   "type": "module",
   "main": "dist/index.js",

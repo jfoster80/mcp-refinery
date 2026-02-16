@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { JsonStore } from '../storage/json-store.js';
 import { getConfig } from '../config.js';
 import { pickAgentsForIntent, getAgent } from '../agents/registry.js';
-import { classifyTask, routeTask, modelSwitchInstruction } from '../routing/index.js';
+import { classifyTask, routeTask } from '../routing/index.js';
 import {
   startResearch, storeFindings, computeConsensus, sanitizeFindings,
   FINDINGS_JSON_SHAPE,
@@ -24,7 +24,7 @@ import {
   recordAudit,
 } from '../storage/index.js';
 import { triageFindings } from '../decision/index.js';
-import { buildBaselinePromptSection, buildCleanupChecklist, matchFindingsToBaselines } from '../knowledge/index.js';
+import { buildCleanupChecklist, matchFindingsToBaselines } from '../knowledge/index.js';
 import type { ResearchPerspective } from '../types/index.js';
 import type { TaskClassification } from '../types/index.js';
 import type { RoutingDecision } from '../routing/router.js';
@@ -126,6 +126,57 @@ const OVERLAY_DESCRIPTIONS: Record<OverlayName, string> = {
 // Pipeline Lifecycle
 // ---------------------------------------------------------------------------
 
+/** Aliases that all resolve to the built-in "self" target. */
+const SELF_ALIASES = new Set(['self', 'mr', 'm-r', 'mcp-refinery']);
+
+/**
+ * If the target is the refinery itself, canonicalize to "self" and auto-enrich
+ * pipeline input with the refinery's own metadata so no manual context is needed.
+ */
+function normalizeSelfTarget(input: {
+  target_server_id: string;
+  server_name?: string;
+  repo_url?: string;
+  context?: string;
+  current_tools?: string[];
+  current_resources?: string[];
+}): void {
+  if (!SELF_ALIASES.has(input.target_server_id.toLowerCase())) return;
+
+  input.target_server_id = 'self';
+  input.server_name = 'MCP Refinery';
+
+  const config = getConfig();
+  const sourcePath = config.storage.source_path;
+  if (sourcePath) {
+    input.repo_url = input.repo_url || `file://${sourcePath}`;
+  } else {
+    input.repo_url = input.repo_url || 'https://github.com/jfoster80/mcp-refinery';
+  }
+
+  // Auto-inject the refinery's own tool names as context
+  if (!input.current_tools || input.current_tools.length === 0) {
+    input.current_tools = [
+      'refine', 'consult', 'ingest', 'pipeline_next', 'pipeline_status',
+      'server_register', 'server_list',
+      'research_start', 'research_store', 'research_consensus', 'research_query',
+      'improvements_triage', 'decision_record_adr', 'decision_check_oscillation', 'decision_capture_scorecard',
+      'delivery_plan', 'delivery_create_pr', 'delivery_release',
+      'governance_approve', 'governance_check',
+      'audit_query', 'audit_stats', 'search_similar',
+      'model_list', 'model_classify',
+      'deliberation_start', 'deliberation_submit', 'deliberation_resolve', 'deliberation_status',
+      'baselines', 'cleanup_checklist',
+    ];
+  }
+
+  // Add self-improvement note to context
+  const selfNote = 'SELF-IMPROVEMENT MODE: The target is the MCP Refinery\'s own codebase.' +
+    (sourcePath ? ` Source path: ${sourcePath}.` : '') +
+    ' Apply the same alignment gates and cleanup passes. The refinery improves itself by the same standards it applies to others.';
+  input.context = input.context ? `${selfNote}\n\n${input.context}` : selfNote;
+}
+
 export function startPipeline(input: {
   target_server_id: string;
   server_name?: string;
@@ -137,6 +188,8 @@ export function startPipeline(input: {
   current_tools?: string[];
   current_resources?: string[];
 }): StepResult {
+  normalizeSelfTarget(input);
+
   const command = classifyIntent(input.intent);
   let overlays = [...COMMAND_OVERLAYS[command]];
   const agents = pickAgentsForIntent(input.intent);
@@ -248,7 +301,10 @@ export function getPipeline(id: string): PipelineState | null {
 
 export function getActivePipeline(serverId?: string): PipelineState | null {
   const all = store().list((p) => p.status !== 'completed' && p.status !== 'error');
-  if (serverId) return (all.find((p) => p.target_server_id === serverId) as PipelineState) ?? null;
+  if (serverId) {
+    const normalized = SELF_ALIASES.has(serverId.toLowerCase()) ? 'self' : serverId;
+    return (all.find((p) => p.target_server_id === normalized) as PipelineState) ?? null;
+  }
   return (all.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] as PipelineState) ?? null;
 }
 
@@ -443,10 +499,7 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
 
 function executeClassifyOverlay(pipeline: PipelineState): StepResult {
   const classification = pipeline.classification!;
-  const routing = pipeline.routing!;
-  const tier = classification.recommended_tier;
   const isMulti = classification.requires_multi_model;
-  const modelNote = routing.assignments.map((a) => modelSwitchInstruction(a.model, a.mode === 'prompt')).join('\n');
 
   pipeline.data.classification = classification as unknown as Record<string, unknown>;
 
@@ -654,7 +707,7 @@ function executeCleanupOverlay(pipeline: PipelineState): StepResult {
 
 function executePropagateOverlay(pipeline: PipelineState): StepResult {
   const servers = listTargetServers();
-  const otherServers = servers.filter((s) => s.server_id !== pipeline.target_server_id);
+  const otherServers = servers.filter((s) => s.server_id !== pipeline.target_server_id && s.server_id !== 'self');
 
   if (otherServers.length === 0) {
     pipeline.data.propagation = 'skipped — no other servers registered';

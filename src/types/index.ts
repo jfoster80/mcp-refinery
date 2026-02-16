@@ -334,6 +334,7 @@ export interface RefineryConfig {
   };
   storage: {
     base_path: string;
+    source_path: string;
   };
   routing: {
     multi_model_threshold: 'high' | 'critical';
