@@ -62,7 +62,7 @@ produce code changes as one of its outputs.
 │  │ Knowledge  │──>│   Research    │──>│   Decision    │──>│  Delivery  │ │
 │  │  Baselines │   │    Plane     │   │    Plane      │   │   Plane    │ │
 │  │            │   │              │   │               │   │            │ │
-│  │ 12 proven  │   │ Perspectives │   │ Policy engine │   │ Plans, PRs │ │
+│  │ 21 proven  │   │ Perspectives │   │ Policy engine │   │ Plans, PRs │ │
 │  │ patterns   │   │ Consensus    │   │ ADRs          │   │ Releases   │ │
 │  │ from our   │   │ Findings     │   │ Scorecards    │   │ SemVer     │ │
 │  │ own arch   │   │              │   │ Triage        │   │            │ │
@@ -94,7 +94,7 @@ produce code changes as one of its outputs.
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Facade Tools: ingest | refine | consult | pipeline_next | pipeline_status │
-│  + 26 internal tools (research, decision, delivery, routing, knowledge)  │
+│  + 5 ResearchOps tools + 26 internal tools                                │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,7 +102,7 @@ produce code changes as one of its outputs.
 
 | Layer | Purpose | Key modules |
 |-------|---------|-------------|
-| **Knowledge** | What "good" looks like | `src/knowledge/baselines.ts` — 12 patterns |
+| **Knowledge** | What "good" looks like | `src/knowledge/baselines.ts` — 21 patterns |
 | **Research** | Gather evidence | `src/research/` — prompts, ingestion, consensus |
 | **Decision** | Prioritize and govern | `src/decision/` — triage, ADR, policy, scorecard, anti-oscillation |
 | **Delivery** | Build and ship | `src/delivery/` — planner, code-agent, test-agent, release-agent, governance |
@@ -183,9 +183,16 @@ self-contained stage that either auto-advances or pauses for input.
           ▼
  ┌─── CLEANUP ────┐     Post-change verification:
  │  stale imports? │     unused imports, dead exports,
- │  dead exports?  │     orphaned types, stale comments,
- │  orphaned types?│     misaligned references
- │  stale comments?│
+ │  dead exports?  │     orphaned types, orphaned files,
+ │  orphaned types?│     stale comments, misaligned refs,
+ │  orphaned files?│     stale build artifacts
+ └───────┬─────────┘
+          │
+          ▼
+ ┌── DOCUMENT ────┐     README tool inventory sync,
+ │  README sync    │     architecture doc accuracy,
+ │  architecture   │     config reference completeness,
+ │  CHANGELOG      │     CHANGELOG entry, example validity
  └───────┬─────────┘
           │
           ▼
@@ -210,10 +217,10 @@ Not every command runs the full pipeline:
 
 | Command | Overlays | Use case |
 |---------|----------|----------|
-| `refine` | research → classify → triage → **align** → plan → execute → **cleanup** → release → propagate | Full improvement cycle |
+| `refine` | research → classify → triage → **align** → plan → execute → **cleanup** → **document** → release → propagate | Full improvement cycle |
 | `assess` | research → classify | Evaluate a server without changing it |
 | `review` | classify → deliberate → **align** | Architecture review with multi-model deliberation |
-| `improve` | research → triage → **align** → plan → execute → **cleanup** | Improve without releasing |
+| `improve` | research → triage → **align** → plan → execute → **cleanup** → **document** | Improve without releasing |
 | `audit` | research → classify | Security/compliance audit |
 | `consult` | classify → deliberate → **align** | Ask experts a question |
 
@@ -236,12 +243,12 @@ User (from ANY workspace):
   normalizeSelfTarget()
     ├── Canonicalize target to "self"
     ├── Auto-inject source_path from config
-    ├── Auto-inject 31 tool names
+    ├── Auto-inject 36 tool names
     └── Add self-improvement context note
           │
           ▼
   Same pipeline as any other target:
-  research → classify → triage → ALIGN → plan → execute → CLEANUP → release → propagate
+  research → classify → triage → ALIGN → plan → execute → CLEANUP → DOCUMENT → release → propagate
 ```
 
 The only difference between self-improvement and improving another server is
@@ -347,23 +354,32 @@ to engage based on intent classification.
 
 ## 6. Knowledge Baselines
 
-The refinery evaluates other servers against 12 patterns from its own architecture.
+The refinery evaluates other servers against 21 patterns from its own architecture.
 These are injected into research prompts so the agent knows what to look for.
 
 | Pattern | Category | Severity |
 |---------|----------|----------|
 | Facade Tool Pattern | architecture | high |
 | Decoupled Processing Planes | architecture | high |
-| Bootstrap Prompt Chaining | devex | medium |
+| Three-Outcome Response Termination | devex | **critical** |
 | Intelligent Model Routing | architecture | medium |
 | User Alignment Gates | governance | **critical** |
 | Anti-Oscillation Regime | governance | high |
 | Immutable Audit Trail | governance | high |
-| Structured Error Responses | reliability | medium |
 | Schema-Based Input Validation | security | **critical** |
 | Post-Change Cleanup Pass | maintenance | high |
+| Orphaned File and Artifact Detection | maintenance | high |
 | Minimal Dependency Footprint | maintenance | medium |
 | Cross-Server Improvement Propagation | maintenance | medium |
+| Zod Schema with Descriptive Annotations | reliability | **critical** |
+| Clear, Actionable Tool Descriptions | devex | high |
+| Structured Response with Next-Step Guidance | devex | high |
+| No Dead-End Responses | reliability | **critical** |
+| Structured Error Responses with Recovery | reliability | high |
+| MCP Protocol Compliance (2025-11-25) | security | **critical** |
+| Transport-Appropriate Security | security | high |
+| Documentation Ships with Code | maintenance | high |
+| Well-Formed Resource URIs | devex | medium |
 
 ---
 
@@ -455,7 +471,7 @@ data/
 ### Single-file bundle
 
 ```
-src/ (42 TypeScript files)
+src/ (46 TypeScript files)
   │
   ├── tsc compile ──> dist/ (JS + declarations)
   │
@@ -553,7 +569,7 @@ src/
   types/index.ts          All type definitions
 
   knowledge/
-    baselines.ts          12 quality patterns from our own architecture
+    baselines.ts          21 quality patterns from our own architecture
     index.ts              Knowledge facade
 
   research/
@@ -595,7 +611,13 @@ src/
     orchestrator.ts       Pipeline state machine + overlay execution
     index.ts              Commands facade
 
-  tools/index.ts          All 31 MCP tool registrations
+  research-ops/
+    types.ts              ResearchCase type system + artifact interfaces
+    case-manager.ts       Case lifecycle: intake → synthesize → review → decide → freeze → implement → evaluate → release
+    validation.ts         Deterministic case validation (non-LLM)
+    index.ts              ResearchOps facade
+
+  tools/index.ts          All 36 MCP tool registrations
   resources/index.ts      MCP resource registrations
   prompts/index.ts        MCP prompt registrations
 

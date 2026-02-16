@@ -120,6 +120,16 @@ const PATTERNS: BaselinePattern[] = [
     severity: 'high',
   },
   {
+    pattern_id: 'orphan_detection',
+    name: 'Orphaned File and Artifact Detection',
+    category: 'maintenance',
+    description: 'After any refactor, restructuring, or module addition, verify that no files, directories, compiled outputs, or config references are orphaned. Orphans include: source files not imported by any module, compiled .js/.d.ts files with no corresponding source, empty or stub modules that serve no purpose, facade re-exports for removed modules, test files for removed code, and config entries for removed features.',
+    why_it_matters: 'Orphaned files silently inflate bundle size, confuse contributors, and create phantom import paths that compile but serve no purpose. Orphaned build artifacts mask real compilation state. Orphaned configs can re-enable deleted features or cause runtime errors.',
+    detection_hints: ['source files with no inbound imports', 'compiled output files with no corresponding source', 'empty index.ts that re-exports nothing or re-exports non-existent modules', 'test files testing removed functions', 'config entries referencing removed modules or features', 'facade files exporting symbols that no consumer imports'],
+    recommendation_when_missing: 'After every structural change, trace the import graph from the entry point. Any source file unreachable from the entry is a candidate for removal. Check dist/ for compiled files with no source counterpart. Verify all facade re-exports resolve to live modules.',
+    severity: 'high',
+  },
+  {
     pattern_id: 'zero_dependency_bias',
     name: 'Minimal Dependency Footprint',
     category: 'maintenance',
@@ -314,15 +324,25 @@ Run this verification after implementing changes. Report any issues found.
 21. **User prompts end with questions or options** — Any next block with control="user" must end with a clear question, numbered options, or explicit instructions. "Review the data above" alone is not acceptable.
 22. **Error paths include recovery** — Every error response must include: what went wrong, likely causes, and specific tool calls or actions to recover.
 
+### Orphaned Files and Artifacts
+
+23. **Unreachable source files** — Trace imports from the entry point (src/index.ts or equivalent). Any .ts source file not reachable through the import graph is orphaned. Flag it for removal or re-integration.
+24. **Stale compiled output** — Check dist/ or build output for .js/.d.ts files whose source .ts files have been deleted or renamed. Delete them.
+25. **Empty or stub modules** — Check for index.ts files that export nothing, or modules that contain only commented-out code or placeholder stubs. Either fill them or remove them.
+26. **Orphaned facade re-exports** — Check each facade index.ts. Every re-exported symbol must resolve to a live module. Flag any re-exports pointing to deleted or renamed files.
+27. **Dead test files** — Check for test files that import or reference functions, classes, or modules that no longer exist. Update or remove them.
+28. **Config ghost entries** — Check config files, .env templates, and environment variable documentation for references to removed features, modules, or tools. Remove them.
+29. **Misaligned directory structure** — Check that the directory structure matches the module architecture. Flag directories that are empty, contain only dead code, or whose purpose no longer matches their name.
+
 ### Documentation Currency (for every change)
 
-23. **README tool inventory sync** — List all tools registered in code. List all tools described in README. The two lists must match exactly. Flag any tool in code but not in README, or in README but not in code.
-24. **Setup instructions validity** — Read the setup/install section. Does it reference current dependencies, correct commands, and valid config? Flag outdated steps.
-25. **Configuration reference completeness** — List all process.env reads and config accesses in code. Every one must appear in the documentation. Flag any undocumented config.
-26. **Architecture doc accuracy** — Does the architecture documentation describe the current module structure, overlay order, and data flow? Flag references to removed or renamed modules.
-27. **CHANGELOG entry** — Does a CHANGELOG (or equivalent) have an entry for the changes made? Flag if missing.
-28. **No phantom doc references** — Search documentation for tool names, config keys, file paths, or module names that no longer exist in code. Every one is a stale reference.
-29. **Example code validity** — Do code examples in documentation use current API signatures, parameter names, and tool names? Flag any that reference old or removed interfaces.
+30. **README tool inventory sync** — List all tools registered in code. List all tools described in README. The two lists must match exactly. Flag any tool in code but not in README, or in README but not in code.
+31. **Setup instructions validity** — Read the setup/install section. Does it reference current dependencies, correct commands, and valid config? Flag outdated steps.
+32. **Configuration reference completeness** — List all process.env reads and config accesses in code. Every one must appear in the documentation. Flag any undocumented config.
+33. **Architecture doc accuracy** — Does the architecture documentation describe the current module structure, overlay order, and data flow? Flag references to removed or renamed modules.
+34. **CHANGELOG entry** — Does a CHANGELOG (or equivalent) have an entry for the changes made? Flag if missing.
+35. **No phantom doc references** — Search documentation for tool names, config keys, file paths, or module names that no longer exist in code. Every one is a stale reference.
+36. **Example code validity** — Do code examples in documentation use current API signatures, parameter names, and tool names? Flag any that reference old or removed interfaces.
 
 Return findings as structured JSON — same format as research findings.`;
 }
@@ -592,6 +612,118 @@ Before marking documentation complete:
 - Secrets, API keys, or credentials (document that they are needed and where to set them, never the values)
 
 Return findings as structured JSON — same format as research findings.`;
+}
+
+/**
+ * Build a comprehensive cleanup guide for post-implementation and evaluation
+ * phases. Covers code hygiene, orphaned file detection, cross-module alignment,
+ * and documentation currency. Designed to be injected into any step that produces
+ * or modifies code.
+ */
+export function buildCleanupGuide(): string {
+  return `## Post-Implementation Cleanup Guide
+
+Run this cleanup pass after implementing changes and BEFORE evaluation or release.
+Every change leaves artifacts. This guide catches them systematically.
+
+### Phase 1: Code-Level Cleanup
+
+**Unused Imports**
+For every modified file, check each import statement:
+- Is every imported symbol actually used in the file body?
+- Are there namespace imports (\`import * as X\`) where only 1-2 symbols are used?
+- Are there type-only imports that should use \`import type\`?
+
+**Dead Exports**
+For every facade module (index.ts re-export files):
+- Does every \`export { X } from './module.js'\` resolve to a real module?
+- Is every exported symbol imported by at least one consumer?
+- Are there re-exports of renamed or removed functions?
+
+**Orphaned Types**
+In type definition files:
+- Is every exported type/interface used by at least one module?
+- Are there union type members (e.g., AuditAction values) that no code path produces?
+- Are there interfaces that were replaced by newer versions but never removed?
+
+**Stale Comments**
+In modified files:
+- Do comments reference functions, modules, or behaviors that no longer exist?
+- Are there TODO/FIXME comments for issues that have been resolved?
+- Are there JSDoc @param tags for parameters that were renamed or removed?
+
+### Phase 2: File-System Cleanup
+
+**Orphaned Source Files**
+Trace the import graph from the entry point (src/index.ts):
+- Every .ts file in src/ should be reachable through imports
+- Files not in the import graph are orphaned — remove or re-integrate
+- Watch for files that are only imported by other orphaned files (orphan chains)
+
+**Stale Build Artifacts**
+In dist/ or build output:
+- Delete .js/.d.ts files whose source .ts file has been removed
+- Delete .js.map files for removed sources
+- Verify the bundle doesn't include dead code from removed modules
+
+**Empty Modules**
+Check for modules that contain:
+- Only commented-out code
+- Only re-exports that all point to the same downstream module
+- Only a single type definition that could live in the parent module
+- No actual logic or meaningful re-exports
+
+**Misaligned Directory Structure**
+- Do directory names still match their contents?
+- Are there directories with only 1 file that should be collapsed?
+- Are there directories that mix concerns (e.g., types + handlers + utils)?
+
+### Phase 3: Cross-Module Alignment
+
+**Interface Contracts**
+For every function that is called across module boundaries:
+- Does the caller's argument list match the function signature?
+- Are there type assertions (\`as\`) that mask misaligned types?
+- Do generic type parameters match between definition and usage?
+
+**Re-export Chains**
+For facade modules that re-export from sub-modules:
+- Does the facade export everything that consumers need?
+- Are there symbols imported directly from sub-modules that should go through the facade?
+- Are type exports separated from value exports where needed?
+
+**Configuration Alignment**
+- Do config defaults in code match documentation?
+- Are new config fields properly defaulted for backward compatibility?
+- Are removed config fields cleaned up from all readers?
+
+### Phase 4: Documentation Sync
+
+**Tool Inventory**
+- List all tools registered in code (grep for \`server.tool(\`)
+- List all tools described in README
+- The two lists must match exactly
+- Check that tool descriptions in README match the code
+
+**Architecture Docs**
+- Does the architecture description match current module structure?
+- Are there references to removed or renamed modules?
+- Is the pipeline/overlay order documented correctly?
+
+**Inline Documentation**
+- Do exported functions have JSDoc/TSDoc comments?
+- Do JSDoc parameter names match actual parameter names?
+- Are return type descriptions accurate?
+
+### Output
+
+Report all findings. For each finding:
+- What: The specific issue found
+- Where: File path and line number (if applicable)
+- Why: Why this is a problem
+- Fix: The specific action to take
+
+Prioritize: security issues > broken imports > dead code > stale docs > cosmetic issues.`;
 }
 
 /**

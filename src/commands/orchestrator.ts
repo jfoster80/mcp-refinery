@@ -25,6 +25,7 @@ import {
 } from '../storage/index.js';
 import { triageFindings } from '../decision/index.js';
 import { buildCleanupChecklist, buildDocumentationGuide, buildImplementationGuide, matchFindingsToBaselines } from '../knowledge/index.js';
+import { createCase as createResearchCase } from '../research-ops/index.js';
 import type { ResearchPerspective } from '../types/index.js';
 import type { TaskClassification } from '../types/index.js';
 import type { RoutingDecision } from '../routing/router.js';
@@ -168,6 +169,7 @@ function normalizeSelfTarget(input: {
       'model_list', 'model_classify',
       'deliberation_start', 'deliberation_submit', 'deliberation_resolve', 'deliberation_status',
       'baselines', 'cleanup_checklist',
+      'research_new', 'research_advance', 'research_status', 'research_consult', 'research_validate',
     ];
   }
 
@@ -416,6 +418,9 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
     pipeline.data.findings_count = consensus.findings.length;
     pipeline.data.agreement = consensus.overall_agreement;
 
+    // Bridge: persist findings in a durable ResearchOps case
+    bridgeToResearchOps(pipeline);
+
     return advanceToNextOverlay(pipeline);
   }
 
@@ -486,6 +491,9 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
     pipeline.data.findings_count = consensus.findings.length;
     pipeline.data.agreement = consensus.overall_agreement;
 
+    // Bridge: persist findings in a durable ResearchOps case
+    bridgeToResearchOps(pipeline);
+
     return advanceToNextOverlay(pipeline);
   }
 
@@ -497,6 +505,37 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
     description: 'Submit findings via pipeline_next.',
     bootstrap_prompt: `Use pipeline_next with pipeline_id="${pipeline.pipeline_id}" and findings=[...your analysis...]`,
   });
+}
+
+/**
+ * Bridge: auto-create a ResearchOps case when the research overlay
+ * concludes with substantial findings. This links the refinery pipeline
+ * to durable research memory, so findings persist across sessions.
+ *
+ * Triggers when: external research content was provided, OR consensus has
+ * 3+ findings, OR intent explicitly requests research depth.
+ */
+function bridgeToResearchOps(pipeline: PipelineState): void {
+  const hasContent = Boolean(pipeline.data.research_content);
+  const findingsCount = (pipeline.data.findings_count as number) ?? 0;
+  const intentNeedsResearch = /research|deep.?dive|analyz/i.test(pipeline.intent);
+
+  if (!hasContent && findingsCount < 3 && !intentNeedsResearch) return;
+
+  try {
+    const rc = createResearchCase({
+      initiative_name: `Pipeline ${pipeline.command}: ${pipeline.intent.slice(0, 60)}`,
+      owner: 'orchestrator',
+      problem_statement: pipeline.intent,
+      goals: [`Improve ${pipeline.target_server_id}`, ...(pipeline.data.context ? [String(pipeline.data.context).slice(0, 200)] : [])],
+      risk_lane: pipeline.classification?.risk_level === 'critical' ? 'high'
+        : (pipeline.classification?.risk_level as 'low' | 'medium' | 'high') ?? 'medium',
+      target_consumer: 'mcp_refinery',
+    });
+    pipeline.data.research_ops_case_id = rc.case_id;
+  } catch {
+    // Non-fatal: pipeline continues even if case creation fails
+  }
 }
 
 function executeClassifyOverlay(pipeline: PipelineState): StepResult {

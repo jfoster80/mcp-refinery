@@ -37,6 +37,11 @@ import {
 } from '../commands/index.js';
 import { getAllAgents } from '../agents/index.js';
 import { getAllPatterns, getCriticalPatterns, buildCleanupChecklist } from '../knowledge/index.js';
+import {
+  createCase, advanceCase, getCase, listCases, consultCase,
+  validateCase, CASE_OVERLAY_PIPELINE, REVIEW_PERSPECTIVES,
+} from '../research-ops/index.js';
+import type { ReviewPerspective, ReviewArtifact } from '../research-ops/index.js';
 
 function output(o: ToolOutput) {
   const parts: string[] = [];
@@ -1004,6 +1009,262 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           description: 'Run the checklist against recently modified files.',
           bootstrap_prompt: checklist,
         },
+      });
+    },
+  );
+
+  // =========================================================================
+  // RESEARCH OPS — Governed research lifecycle for self-improvement
+  // =========================================================================
+
+  server.tool(
+    'research_new',
+    'Create a new Research Case with full scaffolding and pipeline initialization. This is the entry point for all research.',
+    {
+      initiative_name: z.string().describe('Name of the research initiative'),
+      owner: z.string().describe('Owner of this research case'),
+      problem_statement: z.string().describe('Problem we are solving'),
+      goals: z.array(z.string()).describe('Measurable goals'),
+      non_goals: z.array(z.string()).optional().describe('Explicit non-goals'),
+      risk_lane: z.enum(['low', 'medium', 'high']).describe('Risk lane: low, medium, or high'),
+      phi_classification: z.enum(['none', 'internal_only', 'restricted']).optional().default('none').describe('PHI classification — defaults to \'none\''),
+      target_consumer: z.enum(['mcp_refinery', 'software_agent', 'both']).optional().default('both').describe('Target consumer of the change proposal'),
+    },
+    async (args) => {
+      const rc = createCase({
+        initiative_name: args.initiative_name,
+        owner: args.owner,
+        problem_statement: args.problem_statement,
+        goals: args.goals,
+        non_goals: args.non_goals,
+        risk_lane: args.risk_lane,
+        phi_classification: args.phi_classification,
+        target_consumer: args.target_consumer,
+      });
+
+      return output({
+        status: 'success',
+        data: {
+          case_id: rc.case_id,
+          status: rc.status,
+          current_overlay: rc.current_overlay,
+          pipeline: CASE_OVERLAY_PIPELINE,
+          risk_lane: rc.risk_lane,
+          phi_classification: rc.phi_classification,
+          change_budget: rc.change_budget,
+        },
+        message: `Research Case "${rc.initiative_name}" created (${rc.case_id}).`,
+        next: {
+          control: 'agent',
+          description: 'Ingest source material to advance the case.',
+          bootstrap_prompt: `Case ${rc.case_id} created. Pipeline: ${CASE_OVERLAY_PIPELINE.join(' → ')}\n\nNext: Ingest raw research sources. Call research_advance with:\n- case_id="${rc.case_id}"\n- source_content={"chatgpt": "<content>", "gemini": "<content>", "external_links": "<content>"}\n\nSources are stored as-is (never executed, never trusted). The synthesis step will extract structured findings.`,
+        },
+      });
+    },
+  );
+
+  server.tool(
+    'research_advance',
+    'Advance a Research Case through the overlay pipeline. Automatically executes the current overlay and moves to the next. At alignment gates (freeze, release), returns control to the user for approval.',
+    {
+      case_id: z.string().describe('Research Case ID (RC-YYYYMMDD-slug format)'),
+      source_content: z.record(z.string()).optional().describe('Source content to ingest, keyed by name (chatgpt, gemini, grok, external_links, internal_notes)'),
+      user_approval: z.boolean().optional().describe('Explicit user approval for alignment gates (freeze, release)'),
+    },
+    async (args) => {
+      const result = advanceCase(args.case_id, {
+        source_content: args.source_content,
+        user_approval: args.user_approval,
+      });
+
+      if (!result) {
+        return output({
+          status: 'error',
+          data: {},
+          message: `Case "${args.case_id}" not found.`,
+          next: {
+            control: 'user',
+            description: 'Case not found. Check the ID or create a new one.',
+            bootstrap_prompt: `Case "${args.case_id}" does not exist. Use research_new to create a new case, or research_status to list existing cases.`,
+          },
+        });
+      }
+
+      return output({
+        status: result.needs_user_approval ? 'needs_approval' : 'success',
+        data: {
+          case_id: result.case_id,
+          previous_overlay: result.previous_overlay,
+          current_overlay: result.current_overlay,
+          status: result.status,
+          action: result.action_taken,
+        },
+        message: result.action_taken,
+        next: {
+          control: result.needs_user_approval ? 'user' : 'agent',
+          description: result.needs_user_approval
+            ? 'Alignment gate reached. User approval required.'
+            : `Case advanced to "${result.current_overlay}".`,
+          bootstrap_prompt: result.bootstrap_prompt,
+        },
+      });
+    },
+  );
+
+  server.tool(
+    'research_status',
+    'Check the status of a Research Case or list all cases. Shows pipeline progress, current overlay, gates, and next steps.',
+    {
+      case_id: z.string().optional().describe('Case ID to check — omit to list all cases'),
+    },
+    async (args) => {
+      if (args.case_id) {
+        const rc = getCase(args.case_id);
+        if (!rc) {
+          return output({
+            status: 'error',
+            data: {},
+            message: `Case "${args.case_id}" not found.`,
+            next: {
+              control: 'user',
+              description: 'Case not found.',
+              bootstrap_prompt: `Case "${args.case_id}" does not exist. Use research_new to create a new case, or research_status (no args) to list all cases.`,
+            },
+          });
+        }
+
+        const completed = CASE_OVERLAY_PIPELINE.slice(0, rc.overlay_index);
+        const remaining = CASE_OVERLAY_PIPELINE.slice(rc.overlay_index + 1);
+        const reviewCount = Object.keys(rc.reviews).length;
+
+        return output({
+          status: 'success',
+          data: {
+            case_id: rc.case_id,
+            initiative: rc.initiative_name,
+            status: rc.status,
+            current_overlay: rc.current_overlay,
+            progress: `${rc.overlay_index + 1}/${CASE_OVERLAY_PIPELINE.length}`,
+            completed_overlays: completed,
+            remaining_overlays: remaining,
+            risk_lane: rc.risk_lane,
+            phi_classification: rc.phi_classification,
+            sources: Object.keys(rc.sources).length,
+            reviews: `${reviewCount}/${REVIEW_PERSPECTIVES.length}`,
+            decision: rc.decision?.outcome ?? 'pending',
+            proposal_frozen: rc.proposal?.frozen ?? false,
+            evaluation: rc.evaluation?.overall_pass ?? null,
+            change_budget: rc.change_budget,
+          },
+          message: `[${rc.case_id}] ${rc.initiative_name}: ${completed.map((o) => `${o} ✓`).join(' → ')}${completed.length > 0 ? ' → ' : ''}**${rc.current_overlay}** → ${remaining.join(' → ')}`,
+          next: rc.status === 'frozen'
+            ? { control: 'user', description: 'Alignment gate. Approve to continue.', bootstrap_prompt: `Case ${rc.case_id} is at the freeze alignment gate. Review the proposal and call research_advance with case_id="${rc.case_id}" user_approval=true to approve.` }
+            : rc.status === 'completed' || rc.status === 'rejected'
+              ? { control: 'user', description: `Case is ${rc.status}.`, bootstrap_prompt: `Case ${rc.case_id} is ${rc.status}. Use research_consult to query artifacts, or research_new to start a new case.` }
+              : { control: 'agent', description: `Continue with "${rc.current_overlay}" overlay.`, bootstrap_prompt: `Case ${rc.case_id} is at "${rc.current_overlay}". Use research_advance with case_id="${rc.case_id}" to continue.` },
+        });
+      }
+
+      // List all cases
+      const cases = listCases();
+      const active = cases.filter((c) => !['completed', 'rejected', 'deferred'].includes(c.status));
+      const closed = cases.filter((c) => ['completed', 'rejected', 'deferred'].includes(c.status));
+
+      return output({
+        status: 'success',
+        data: {
+          total: cases.length,
+          active: active.map((c) => ({
+            case_id: c.case_id,
+            initiative: c.initiative_name,
+            status: c.status,
+            overlay: c.current_overlay,
+            risk: c.risk_lane,
+          })),
+          closed: closed.map((c) => ({
+            case_id: c.case_id,
+            initiative: c.initiative_name,
+            status: c.status,
+          })),
+        },
+        message: `${cases.length} case(s): ${active.length} active, ${closed.length} closed.`,
+        next: active.length > 0
+          ? { control: 'agent', description: 'Active cases found. Continue the most recent one.', bootstrap_prompt: `${active.length} active case(s). Most recent: ${active[0].case_id} ("${active[0].initiative_name}") at "${active[0].current_overlay}". Use research_advance with case_id="${active[0].case_id}" to continue.` }
+          : { control: 'user', description: 'No active cases. Create a new one.', bootstrap_prompt: 'No active research cases. Use research_new to start a new research initiative.' },
+      });
+    },
+  );
+
+  server.tool(
+    'research_consult',
+    'Query a Research Case for decisions, evidence, or artifact content. Use this to understand what was decided and why.',
+    {
+      case_id: z.string().describe('Research Case ID to query'),
+      question: z.string().describe('Question about this case'),
+      artifact: z.enum(['intake', 'synthesis', 'evidence_matrix', 'reviews', 'decision', 'proposal', 'brief', 'evaluation', 'release_notes']).optional().describe('Specific artifact to focus on'),
+    },
+    async (args) => {
+      const result = consultCase(args.case_id, args.question, args.artifact);
+
+      return output({
+        status: result.case_status === 'rejected' && result.relevant_artifacts.length === 0 ? 'error' : 'success',
+        data: {
+          case_id: args.case_id,
+          question: args.question,
+          artifacts_consulted: result.relevant_artifacts,
+          case_status: result.case_status,
+        },
+        message: result.answer,
+        next: {
+          control: 'user',
+          description: 'Case consultation complete. Review the answer above.',
+          bootstrap_prompt: `Consultation for case ${args.case_id} complete. Artifacts consulted: ${result.relevant_artifacts.join(', ') || 'none available'}.\n\nTo drill deeper: use research_consult with a specific artifact parameter.\nTo advance the case: use research_advance with case_id="${args.case_id}".\nTo validate: use research_validate with case_id="${args.case_id}".`,
+        },
+      });
+    },
+  );
+
+  server.tool(
+    'research_validate',
+    'Run deterministic validation checks on a Research Case. Checks structure, PHI policy, review completeness, scope freeze, acceptance criteria, and more.',
+    {
+      case_id: z.string().describe('Research Case ID to validate'),
+    },
+    async (args) => {
+      const rc = getCase(args.case_id);
+      if (!rc) {
+        return output({
+          status: 'error',
+          data: {},
+          message: `Case "${args.case_id}" not found.`,
+          next: {
+            control: 'user',
+            description: 'Case not found.',
+            bootstrap_prompt: `Case "${args.case_id}" does not exist. Use research_new to create a new case, or research_status to list existing cases.`,
+          },
+        });
+      }
+
+      const result = validateCase(rc);
+      const errors = result.checks.filter((c) => !c.passed && c.severity === 'error');
+      const warnings = result.checks.filter((c) => !c.passed && c.severity === 'warning');
+
+      return output({
+        status: result.passed ? 'success' : 'error',
+        data: {
+          case_id: result.case_id,
+          passed: result.passed,
+          checks: result.checks,
+          error_count: errors.length,
+          warning_count: warnings.length,
+          validated_at: result.validated_at,
+        },
+        message: result.passed
+          ? `Validation passed: ${result.checks.length} checks, 0 errors, ${warnings.length} warning(s).`
+          : `Validation FAILED: ${errors.length} error(s), ${warnings.length} warning(s).\n${errors.map((e) => `  - ${e.name}: ${e.message}`).join('\n')}`,
+        next: result.passed
+          ? { control: 'agent', description: 'All validation checks passed. Case can proceed.', bootstrap_prompt: `Case ${args.case_id} passed all ${result.checks.length} validation checks. Use research_advance to continue.` }
+          : { control: 'user', description: 'Validation failed. Fix the issues before proceeding.', bootstrap_prompt: `Case ${args.case_id} failed validation with ${errors.length} error(s):\n${errors.map((e) => `- ${e.name}: ${e.message}`).join('\n')}\n\nFix these issues, then re-run research_validate.` },
       });
     },
   );

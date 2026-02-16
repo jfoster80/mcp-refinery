@@ -249,7 +249,7 @@ $devJson  = Write-McpConfig -Config $McpConnectionDev -Label "Dev MCP Connection
 Test-McpSettingsAlignment
 
 Write-Header "Summary"
-Write-Host "  Tools:    31"
+Write-Host "  Tools:    36"
 Write-Host "  Version:  $ServerVersion"
 Write-Host "  Bundle:   dist/mcp-refinery.cjs"
 Write-Host "  Status:   READY" -ForegroundColor Green

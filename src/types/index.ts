@@ -40,7 +40,10 @@ export type AuditAction =
   | 'delivery.released' | 'delivery.rolled_back'
   | 'governance.approval' | 'governance.escalation' | 'policy.violation'
   | 'pipeline.start' | 'pipeline.cleanup' | 'pipeline.documentation'
-  | 'deliberation.start' | 'deliberation.resolve';
+  | 'deliberation.start' | 'deliberation.resolve'
+  | 'research_ops.case_created' | 'research_ops.case_advanced'
+  | 'research_ops.proposal_frozen' | 'research_ops.case_completed'
+  | 'research_ops.case_validated';
 
 // ---------------------------------------------------------------------------
 // Bootstrap Prompt System

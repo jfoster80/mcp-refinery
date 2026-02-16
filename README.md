@@ -158,12 +158,13 @@ Use the pipeline_status tool
 Every pipeline passes through overlays in order. Two overlays are **mandatory gates**:
 
 ```
-research → classify → [deliberate] → triage → ALIGN → plan → execute → CLEANUP → release → propagate
-                                                 ▲                          ▲
-                                          user must approve         post-change verification
+research → classify → [deliberate] → triage → ALIGN → plan → execute → CLEANUP → DOCUMENT → release → propagate
+                                                 ▲                          ▲          ▲
+                                          user must approve    post-change    docs ship
+                                                               verification   with code
 ```
 
-The **align** gate always pauses for user confirmation before changing anything. The **cleanup** pass always runs after execution to catch stale artifacts.
+The **align** gate always pauses for user confirmation before changing anything. The **cleanup** pass always runs after execution to catch stale imports, dead exports, orphaned files, and misaligned references. The **document** pass ensures documentation ships with code — no release proceeds with stale docs.
 
 ## Model Routing
 
@@ -180,7 +181,7 @@ Keys are checked live on every call — adding a key takes effect immediately.
 
 For critical decisions, two architect-tier models review the same problem (multi-model deliberation). When they disagree, the conflict goes to the user.
 
-## MCP Tools (31)
+## MCP Tools (36)
 
 ### Facade (start here)
 
@@ -191,6 +192,16 @@ For critical decisions, two architect-tier models review the same problem (multi
 | `consult` | Specialist consultation / deliberation |
 | `pipeline_next` | Advance active pipeline |
 | `pipeline_status` | Check pipeline state |
+
+### ResearchOps (governed research lifecycle)
+
+| Tool | Purpose |
+|------|---------|
+| `research_new` | Create a new Research Case with full scaffolding |
+| `research_advance` | Advance a case through the overlay pipeline |
+| `research_status` | Check case status or list all cases |
+| `research_consult` | Query a case for decisions, evidence, or artifacts |
+| `research_validate` | Run deterministic validation checks on a case |
 
 ### Internal (advanced)
 

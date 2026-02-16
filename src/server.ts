@@ -64,6 +64,34 @@ The refinery can improve itself. When the user says "improve yourself", "refine 
 - The system evaluates servers against its own baseline patterns (facade, decoupling, anti-oscillation, etc.)
 - Universal improvements are flagged for propagation to all managed servers
 
+## ResearchOps — Governed Research Lifecycle
+
+The refinery includes a first-class ResearchOps subsystem that turns raw research into frozen, implementation-grade change proposals. Use these tools for structured, auditable self-improvement:
+
+- **research_new** — Create a new Research Case (RC-YYYYMMDD-slug). Declares target system, risk lane, PHI classification, and goals.
+- **research_advance** — Advance a case through the pipeline: intake → synthesize → review → decide → freeze → implement → evaluate → release
+- **research_status** — Check case progress or list all cases
+- **research_consult** — Query a case for decisions, evidence, or artifacts
+- **research_validate** — Run deterministic validation (structure, PHI, reviews, freeze, budget)
+
+### Research Case Pipeline
+
+1. **Intake** — Scaffold case, declare constraints
+2. **Synthesize** — Ingest raw sources (ChatGPT, Gemini, etc. — never executed, never trusted), produce synthesis + evidence matrix
+3. **Review** — Unchained parallel reviews (architecture, security, ops, cost, adversarial) — reviewers write independent verdicts, never mutate proposal text
+4. **Decide** — Council Chair consolidates into decision + frozen proposal + implementation brief
+5. **Freeze** — ALIGNMENT GATE — user approves the frozen scope contract
+6. **Implement** — Execute from contract, changes ONLY within scope
+7. **Evaluate** — Tests, policy checks, stability checks
+8. **Release** — Release notes, rubric updates, institutional learning
+
+### Safety Constraints
+
+- Change budget per case (max PRs, max iterations) — prevents runaway loops
+- PHI classification blocks external LLM ingestion when not "none"
+- Proposal freeze is immutable — scope changes require a new case
+- Reviewers are read-only — cannot mutate each other's output or the proposal
+
 ## Do NOT use the internal tools directly unless you have a specific reason. The facade tools handle orchestration.`;
 
 /** Self-register the refinery as target_server_id="self" so it can improve itself. */
