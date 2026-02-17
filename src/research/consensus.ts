@@ -11,7 +11,7 @@ import type {
   Finding, ResearchPerspective, RiskLevel, Evidence,
 } from '../types/index.js';
 
-export function computeConsensus(feeds: ResearchFeedEntry[], targetServerId: string, threshold = 0.6): ConsensusResult {
+export function computeConsensus(feeds: ResearchFeedEntry[], targetServerId: string, threshold = 0.3): ConsensusResult {
   if (feeds.length === 0) {
     return { consensus_id: randomUUID(), target_server_id: targetServerId, computed_at: new Date().toISOString(), findings: [], overall_agreement: 0, perspectives_used: [] };
   }
@@ -43,12 +43,49 @@ function clusterFindings(all: CF[], threshold: number): CF[][] {
     for (let j = i + 1; j < all.length; j++) {
       if (used.has(j)) continue;
       if (all[i].perspective === all[j].perspective) continue;
-      const sim = jaccardNgram(all[i].finding.claim + ' ' + all[i].finding.recommendation, all[j].finding.claim + ' ' + all[j].finding.recommendation);
+      const textA = all[i].finding.claim + ' ' + all[i].finding.recommendation;
+      const textB = all[j].finding.claim + ' ' + all[j].finding.recommendation;
+      const sim = combinedSimilarity(textA, textB);
       if (sim >= threshold) { cluster.push(all[j]); used.add(j); }
     }
     clusters.push(cluster);
   }
   return clusters;
+}
+
+/**
+ * Multi-level similarity: combines keyword (unigram) overlap with bigram phrase
+ * matching. This catches semantically related findings that use different phrasing
+ * (e.g. "input redaction" vs "PHI blocking" both mention "external MCP calls").
+ */
+function combinedSimilarity(a: string, b: string): number {
+  const keyword = keywordJaccard(a, b);
+  const bigram = jaccardNgram(a, b, 2);
+  return Math.max(keyword, bigram);
+}
+
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+  'should', 'may', 'might', 'can', 'shall', 'to', 'of', 'in', 'for',
+  'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during',
+  'before', 'after', 'and', 'but', 'or', 'not', 'no', 'so', 'yet',
+  'both', 'each', 'all', 'any', 'more', 'most', 'other', 'some', 'such',
+  'only', 'own', 'same', 'than', 'too', 'very', 'that', 'this', 'these',
+  'those', 'it', 'its', 'also', 'use', 'using', 'used', 'needs', 'need',
+  'must', 'ensure', 'implement', 'add', 'create', 'update', 'server',
+]);
+
+function keywordJaccard(a: string, b: string): number {
+  const extract = (t: string): Set<string> => {
+    const words = t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+    return new Set(words);
+  };
+  const sa = extract(a), sb = extract(b);
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let inter = 0;
+  for (const w of sa) if (sb.has(w)) inter++;
+  return inter / (sa.size + sb.size - inter);
 }
 
 function buildConsensusFinding(cluster: CF[], totalPerspectives: number): ConsensusFinding {

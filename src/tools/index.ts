@@ -34,6 +34,7 @@ import {
 } from '../routing/index.js';
 import {
   startPipeline, advancePipeline, getPipeline, getActivePipeline,
+  getOverlayRequirements,
 } from '../commands/index.js';
 import { getAllAgents } from '../agents/index.js';
 import { getAllPatterns, getCriticalPatterns, buildCleanupChecklist } from '../knowledge/index.js';
@@ -44,17 +45,24 @@ import {
 import type { ReviewPerspective, ReviewArtifact } from '../research-ops/index.js';
 
 function output(o: ToolOutput) {
+  // Include next_action as structured data (machine-readable)
+  // instead of mixing bootstrap prompts into the text body
+  const dataWithAction = { ...o.data } as Record<string, unknown>;
+  if (o.next) {
+    dataWithAction.next_action = {
+      control: o.next.control,
+      description: o.next.description,
+      bootstrap_prompt: o.next.bootstrap_prompt,
+    };
+  }
+
   const parts: string[] = [];
-  parts.push(JSON.stringify(o.data, null, 2));
+  parts.push(JSON.stringify(dataWithAction, null, 2));
   parts.push('');
   parts.push(`**Status**: ${o.status} — ${o.message}`);
   if (o.next) {
     parts.push(`**Control returns to**: ${o.next.control}`);
     parts.push(`**Next step**: ${o.next.description}`);
-    parts.push('');
-    parts.push('```prompt');
-    parts.push(o.next.bootstrap_prompt);
-    parts.push('```');
   }
   return { content: [{ type: 'text' as const, text: parts.join('\n') }] };
 }
@@ -157,6 +165,13 @@ export function registerTools(server: McpServer): void {
         intent: args.intent ?? 'improve based on ingested research',
         research_content: args.content,
       });
+
+      // Determine the required perspectives so the caller knows upfront
+      const pipeline = getPipeline(result.pipeline_id);
+      const requiredPersp = pipeline
+        ? (pipeline.data.ingest_perspectives as unknown as string[]) ?? ['security', 'reliability', 'devex', 'performance']
+        : ['security', 'reliability', 'devex', 'performance'];
+
       return output({
         status: 'success',
         data: {
@@ -165,6 +180,9 @@ export function registerTools(server: McpServer): void {
           overlays: result.data.overlays,
           progress: result.data.progress,
           agents_active: result.agents_active,
+          required_perspectives: requiredPersp,
+          total_perspectives: requiredPersp.length,
+          workflow: `Submit findings for each perspective (${requiredPersp.join(', ')}) via pipeline_next, or use research_store individually then pipeline_next will auto-detect completion.`,
         },
         message: result.message,
         next: result.next,
@@ -174,7 +192,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     'pipeline_next',
-    'Advance the active pipeline to the next step. The orchestrator figures out which overlay, agent, and model to engage next. Just call this to keep moving.',
+    'Advance the active pipeline to the next step. The orchestrator figures out which overlay, agent, and model to engage next. Just call this to keep moving. Use force_advance=true to skip a stuck overlay.',
     {
       pipeline_id: z.string().describe('Pipeline to advance'),
       findings: z.array(z.object({
@@ -184,16 +202,27 @@ export function registerTools(server: McpServer): void {
         risk: z.object({ level: z.enum(['low', 'medium', 'high', 'critical']), notes: z.string() }),
         evidence: z.array(z.object({ type: z.enum(['url', 'quote', 'spec_reference']), value: z.string(), quality: z.enum(['A', 'B', 'C']) })),
       })).optional().describe('Research findings from the agent (when the previous step asked for analysis)'),
+      force_advance: z.boolean().optional().describe('Force-advance past the current overlay even if it has not completed normally. Use when the pipeline is stuck.'),
+      complete_overlay: z.boolean().optional().describe('Mark the current overlay as complete and advance to the next. Use when overlay work was done via individual tools.'),
     },
     async (args) => {
       const input: Record<string, unknown> = {};
       if (args.findings) input.findings = args.findings;
 
-      const result = advancePipeline(args.pipeline_id, Object.keys(input).length > 0 ? input : undefined);
+      const options = {
+        force_advance: args.force_advance,
+        complete_overlay: args.complete_overlay,
+      };
+
+      const result = advancePipeline(
+        args.pipeline_id,
+        Object.keys(input).length > 0 ? input : undefined,
+        (options.force_advance || options.complete_overlay) ? options : undefined,
+      );
       if (!result) return output({ status: 'error', data: {}, message: 'Pipeline not found.', next: { control: 'user', description: 'The pipeline ID was not found. Check the ID or start a new pipeline.', bootstrap_prompt: `Pipeline "${args.pipeline_id}" does not exist. Use pipeline_status to find active pipelines, or use refine to start a new one.` } });
 
       return output({
-        status: result.status === 'completed' ? 'success' : result.status === 'waiting_user' ? 'needs_approval' : 'success',
+        status: result.status === 'completed' ? 'success' : result.status === 'waiting_user' ? 'needs_approval' : result.status === 'error' ? 'error' : 'success',
         data: {
           pipeline_id: result.pipeline_id,
           overlay: result.overlay,
@@ -220,6 +249,7 @@ export function registerTools(server: McpServer): void {
       const remaining = pipeline.overlays.slice(pipeline.overlay_index + 1);
       const agents = getAllAgents();
       const engaged = pipeline.agents_engaged.map((id) => agents.find((a) => a.agent_id === id)?.name ?? id);
+      const requirements = getOverlayRequirements(pipeline);
 
       return output({
         status: 'success',
@@ -233,13 +263,17 @@ export function registerTools(server: McpServer): void {
           progress: `${pipeline.overlay_index + 1}/${pipeline.overlays.length}`,
           agents_engaged: engaged,
           intent: pipeline.intent,
+          waiting_for: requirements,
+          error: pipeline.error_message ?? null,
         },
         message: `Pipeline [${pipeline.command}]: ${completed.map((o) => `${o} ✓`).join(' → ')}${completed.length > 0 ? ' → ' : ''}**${current}** → ${remaining.join(' → ')}`,
         next: pipeline.status === 'waiting_user'
-          ? { control: 'user', description: 'User input needed.', bootstrap_prompt: `Pipeline paused at "${current}". Review the data above and use pipeline_next with pipeline_id="${pipeline.pipeline_id}" to continue.` }
+          ? { control: 'user', description: (requirements as Record<string, unknown>).instructions as string ?? 'User input needed.', bootstrap_prompt: `Pipeline paused at "${current}". Review the data above and use pipeline_next with pipeline_id="${pipeline.pipeline_id}" to continue.` }
           : pipeline.status === 'completed'
             ? { control: 'user', description: 'Pipeline complete.', bootstrap_prompt: 'Pipeline finished. Use refine to start a new cycle.' }
-            : { control: 'agent', description: 'Continue the pipeline.', bootstrap_prompt: `Use pipeline_next with pipeline_id="${pipeline.pipeline_id}" to continue.` },
+            : pipeline.status === 'error'
+              ? { control: 'user', description: `Error: ${pipeline.error_message}. Use force_advance=true to skip.`, bootstrap_prompt: `Pipeline error at "${current}": ${pipeline.error_message}\n\nUse pipeline_next with pipeline_id="${pipeline.pipeline_id}" force_advance=true to skip this overlay.` }
+              : { control: 'agent', description: (requirements as Record<string, unknown>).instructions as string ?? 'Continue the pipeline.', bootstrap_prompt: `Use pipeline_next with pipeline_id="${pipeline.pipeline_id}" to continue.` },
       });
     },
   );
@@ -369,17 +403,25 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
       const entry = storeFindings(args.target_server_id, args.perspective as ResearchPerspective, args.prompt_hash, sanitized);
 
       const feeds = getResearchFeeds(args.target_server_id);
-      const remainingPerspectives = ['security', 'reliability', 'compliance', 'devex', 'performance']
-        .filter((p) => !feeds.some((f) => f.perspective === p));
+      const allPerspectives = ['security', 'reliability', 'compliance', 'devex', 'performance'];
+      const completedPerspectives = feeds.map((f) => f.perspective);
+      const remainingPerspectives = allPerspectives.filter((p) => !feeds.some((f) => f.perspective === p));
 
       if (remainingPerspectives.length > 0) {
         return output({
           status: 'success',
-          data: { feed_id: entry.feed_id, findings_stored: sanitized.length, confidence: entry.confidence, feeds_total: feeds.length },
-          message: `Stored ${sanitized.length} findings for "${args.perspective}". ${remainingPerspectives.length} perspective(s) remaining.`,
+          data: {
+            feed_id: entry.feed_id, findings_stored: sanitized.length, confidence: entry.confidence,
+            feeds_total: feeds.length,
+            perspectives_required: allPerspectives,
+            perspectives_completed: completedPerspectives,
+            perspectives_remaining: remainingPerspectives,
+            progress: `${completedPerspectives.length}/${allPerspectives.length}`,
+          },
+          message: `Stored ${sanitized.length} findings for "${args.perspective}". ${remainingPerspectives.length} perspective(s) remaining: ${remainingPerspectives.join(', ')}.`,
           next: {
             control: 'agent',
-            description: `Continue with "${remainingPerspectives[0]}" perspective.`,
+            description: `Continue with "${remainingPerspectives[0]}" perspective. Required: ${allPerspectives.join(', ')}. Done: ${completedPerspectives.join(', ')}.`,
             bootstrap_prompt: `Use the research_start tool with target_server_id="${args.target_server_id}" and perspectives=["${remainingPerspectives[0]}"] to get the next research prompt. Then analyze it and store findings.`,
           },
         });
@@ -387,8 +429,15 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
 
       return output({
         status: 'success',
-        data: { feed_id: entry.feed_id, findings_stored: sanitized.length, confidence: entry.confidence, feeds_total: feeds.length },
-        message: `All perspectives complete. Ready to compute consensus.`,
+        data: {
+          feed_id: entry.feed_id, findings_stored: sanitized.length, confidence: entry.confidence,
+          feeds_total: feeds.length,
+          perspectives_required: allPerspectives,
+          perspectives_completed: completedPerspectives,
+          perspectives_remaining: [],
+          progress: `${allPerspectives.length}/${allPerspectives.length}`,
+        },
+        message: `All perspectives complete (${allPerspectives.join(', ')}). Ready to compute consensus.`,
         next: {
           control: 'agent',
           description: 'Compute cross-perspective consensus.',
@@ -970,7 +1019,7 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
     'baselines',
     'View the quality patterns the refinery evaluates servers against. These are derived from the refinery\'s own architecture — the standard it holds other servers to.',
     {
-      category: z.enum(['all', 'critical', 'architecture', 'governance', 'devex', 'reliability', 'security', 'maintenance']).optional().describe('Filter by category (default: critical)'),
+      category: z.enum(['all', 'critical', 'architecture', 'governance', 'devex', 'reliability', 'security', 'maintenance', 'compliance']).optional().describe('Filter by category (default: critical). Use "compliance" to see healthcare compliance patterns for evaluating agentic dev tools that build PHI-touching software.'),
     },
     async (args) => {
       const cat = args.category ?? 'critical';

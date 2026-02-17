@@ -3,7 +3,9 @@
  */
 export {
   getAllPatterns, getPatternsByCategory, getCriticalPatterns,
-  buildBaselinePromptSection, buildCleanupChecklist, buildCleanupGuide,
+  getCompliancePatterns, getCompliancePatternsBySeverity,
+  buildBaselinePromptSection, buildCompliancePromptSection,
+  buildCleanupChecklist, buildCleanupGuide,
   buildDocumentationGuide, buildImplementationGuide, matchFindingsToBaselines,
 } from './baselines.js';
-export type { BaselinePattern } from './baselines.js';
+export type { BaselinePattern, BaselineCategory } from './baselines.js';

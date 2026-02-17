@@ -16,6 +16,8 @@ import type {
   ChangeCategory,
   RiskLevel,
   TargetServerConfig,
+  Evidence,
+  ResearchPerspective,
 } from '../types/index.js';
 import { getTargetServer, insertProposal, recordAudit } from '../storage/index.js';
 import { evaluatePolicy } from './policy.js';
@@ -24,6 +26,10 @@ import { getConfig } from '../config.js';
 
 /**
  * Triage consensus findings into prioritized improvement proposals.
+ *
+ * Clusters related findings by category and keyword similarity before
+ * creating proposals, so 41 findings become ~6–10 coherent work streams
+ * instead of 41 separate proposals.
  */
 export function triageFindings(
   consensus: ConsensusResult,
@@ -34,25 +40,23 @@ export function triageFindings(
   const triagedProposals: TriagedProposal[] = [];
   const escalations: string[] = [];
 
-  for (const finding of consensus.findings) {
-    if (finding.agreement_score < 0.33 && finding.combined_confidence < 0.5) {
-      escalations.push(
-        `Low-agreement finding needs human review: "${finding.claim}" ` +
-        `(agreement: ${finding.agreement_score.toFixed(2)}, ` +
-        `confidence: ${finding.combined_confidence.toFixed(2)})`,
-      );
-      continue;
-    }
+  // Cluster related findings into coherent groups before creating proposals
+  const clustered = clusterForTriage(consensus.findings);
+  escalations.push(...clustered.escalations);
 
-    const proposal = createProposalFromFinding(finding, consensus.target_server_id);
+  for (const group of clustered.groups) {
+    const representative = group.representative;
+    const proposal = group.members.length === 1
+      ? createProposalFromFinding(representative, consensus.target_server_id)
+      : createProposalFromGroup(group, consensus.target_server_id);
     proposals.push(proposal);
 
     const policyEval = evaluatePolicy(proposal);
-    const oscillationCheck = checkOscillation(proposal, finding.combined_confidence);
+    const oscillationCheck = checkOscillation(proposal, representative.combined_confidence);
     const noOp = isNoOpChange(proposal);
 
-    const priorityScore = computePriorityScore(finding, server);
-    const riskAdjustedImpact = computeRiskAdjustedImpact(finding);
+    const priorityScore = computePriorityScore(representative, server);
+    const riskAdjustedImpact = computeRiskAdjustedImpact(representative);
 
     const triaged: TriagedProposal = {
       proposal_id: proposal.proposal_id,
@@ -60,7 +64,7 @@ export function triageFindings(
       risk_adjusted_impact: riskAdjustedImpact,
       blocked_by_oscillation: oscillationCheck.blocked,
       requires_human_approval: policyEval.requires_approval || !policyEval.allowed,
-      reason: buildTriageReason(policyEval.allowed, oscillationCheck.blocked, noOp, finding),
+      reason: buildTriageReason(policyEval.allowed, oscillationCheck.blocked, noOp, representative),
     };
 
     if (noOp) {
@@ -83,6 +87,7 @@ export function triageFindings(
         risk_adjusted_impact: riskAdjustedImpact,
         blocked: oscillationCheck.blocked,
         requires_approval: triaged.requires_human_approval,
+        cluster_size: group.members.length,
       },
     );
   }
@@ -98,6 +103,155 @@ export function triageFindings(
     total_estimated_loc: totalLOC,
     budget_remaining: Math.max(0, budgetRemaining),
     escalations,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Finding Clustering — groups related findings into coherent work streams
+// ---------------------------------------------------------------------------
+
+interface FindingGroup {
+  representative: ConsensusFinding;
+  members: ConsensusFinding[];
+  category: ChangeCategory;
+}
+
+function clusterForTriage(
+  findings: ConsensusFinding[],
+): { groups: FindingGroup[]; escalations: string[] } {
+  const escalations: string[] = [];
+  const eligible: ConsensusFinding[] = [];
+
+  for (const f of findings) {
+    if (f.agreement_score < 0.33 && f.combined_confidence < 0.5) {
+      escalations.push(
+        `Low-agreement finding needs human review: "${f.claim}" ` +
+        `(agreement: ${f.agreement_score.toFixed(2)}, confidence: ${f.combined_confidence.toFixed(2)})`,
+      );
+    } else {
+      eligible.push(f);
+    }
+  }
+
+  // Group by inferred category first
+  const byCategory = new Map<ChangeCategory, ConsensusFinding[]>();
+  for (const f of eligible) {
+    const cat = inferCategory(f);
+    const group = byCategory.get(cat) ?? [];
+    group.push(f);
+    byCategory.set(cat, group);
+  }
+
+  const groups: FindingGroup[] = [];
+  for (const [cat, catFindings] of byCategory) {
+    if (catFindings.length <= 2) {
+      // Small groups: keep individual findings as separate proposals
+      for (const f of catFindings) {
+        groups.push({ representative: f, members: [f], category: cat });
+      }
+    } else {
+      // Large groups: further cluster by keyword similarity, then merge
+      const subClusters = clusterBySimilarity(catFindings, 0.15);
+      for (const sub of subClusters) {
+        const best = sub.reduce((a, b) =>
+          b.combined_confidence * (1 + b.agreement_score) >
+          a.combined_confidence * (1 + a.agreement_score) ? b : a,
+        );
+        groups.push({ representative: best, members: sub, category: cat });
+      }
+    }
+  }
+
+  return { groups, escalations };
+}
+
+function clusterBySimilarity(findings: ConsensusFinding[], threshold: number): ConsensusFinding[][] {
+  const clusters: ConsensusFinding[][] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < findings.length; i++) {
+    if (used.has(i)) continue;
+    const cluster = [findings[i]];
+    used.add(i);
+
+    for (let j = i + 1; j < findings.length; j++) {
+      if (used.has(j)) continue;
+      const sim = triageKeywordSim(
+        findings[i].claim + ' ' + findings[i].recommendation,
+        findings[j].claim + ' ' + findings[j].recommendation,
+      );
+      if (sim >= threshold) { cluster.push(findings[j]); used.add(j); }
+    }
+
+    clusters.push(cluster);
+  }
+
+  return clusters;
+}
+
+const TRIAGE_STOP_WORDS = new Set([
+  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+  'should', 'may', 'might', 'can', 'shall', 'to', 'of', 'in', 'for',
+  'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during',
+  'before', 'after', 'and', 'but', 'or', 'not', 'no', 'so', 'yet',
+  'both', 'each', 'all', 'any', 'more', 'most', 'other', 'some', 'such',
+  'only', 'own', 'same', 'than', 'too', 'very', 'that', 'this', 'these',
+  'those', 'it', 'its', 'also', 'use', 'using', 'used', 'needs', 'need',
+  'must', 'ensure', 'implement', 'add', 'create', 'update',
+]);
+
+function triageKeywordSim(a: string, b: string): number {
+  const extract = (t: string): Set<string> => {
+    const words = t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !TRIAGE_STOP_WORDS.has(w));
+    return new Set(words);
+  };
+  const sa = extract(a), sb = extract(b);
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let inter = 0;
+  for (const w of sa) if (sb.has(w)) inter++;
+  return inter / (sa.size + sb.size - inter);
+}
+
+function createProposalFromGroup(
+  group: FindingGroup,
+  targetServerId: string,
+): ImprovementProposal {
+  const { representative, members, category } = group;
+  const now = new Date().toISOString();
+
+  const descriptions = members.map((f) => `- ${f.claim}: ${f.recommendation}`);
+  const combinedDesc = `${representative.claim}\n\nCombined recommendations (${members.length} related findings):\n${descriptions.join('\n')}`;
+
+  const allCriteria = new Set<string>();
+  for (const f of members) for (const c of buildAcceptanceCriteria(f)) allCriteria.add(c);
+
+  const allPersp = new Set<ResearchPerspective>();
+  for (const f of members) for (const p of f.supporting_perspectives) allPersp.add(p);
+
+  const evidenceMap = new Map<string, Evidence>();
+  for (const f of members) for (const e of f.merged_evidence) evidenceMap.set(`${e.type}:${e.value}`, e);
+
+  const riskOrder: RiskLevel[] = ['low', 'medium', 'high', 'critical'];
+  const maxRisk = riskOrder[Math.max(...members.map((f) => riskOrder.indexOf(f.risk_level)))];
+
+  return {
+    proposal_id: randomUUID(),
+    target_server_id: targetServerId,
+    title: `[${category}] ${representative.claim.slice(0, 150)} (+${members.length - 1} related)`,
+    description: combinedDesc,
+    category,
+    status: 'triaged',
+    priority: 0,
+    risk_level: maxRisk,
+    consensus_finding_ref: members.map((f) => f.claim.slice(0, 50)).join(' | '),
+    acceptance_criteria: [...allCriteria],
+    estimated_loc_change: members.reduce((sum, f) => sum + estimateLOC(f), 0),
+    created_at: now,
+    updated_at: now,
+    adr_refs: [],
+    scorecard_baseline: null,
+    scorecard_target: null,
   };
 }
 

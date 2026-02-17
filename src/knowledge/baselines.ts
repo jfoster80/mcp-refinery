@@ -4,16 +4,28 @@
  *
  * The refinery eats its own cooking. Every pattern here is something
  * the refinery does well, so it knows what to look for and recommend.
+ *
+ * Healthcare Compliance context:
+ * The refinery creates and improves agentic development tools (e.g. Cursor
+ * Context Layer). Neither the refinery nor those tools handle PHI directly.
+ * However, the SOFTWARE those tools help build WILL handle PHI. The
+ * compliance patterns evaluate whether managed MCP servers produce code,
+ * architecture, and scaffolding that is safe for a healthcare software
+ * vendor to ship into PHI-touching production environments.
  */
 
 // ---------------------------------------------------------------------------
 // Pattern Definitions
 // ---------------------------------------------------------------------------
 
+export type BaselineCategory =
+  | 'architecture' | 'governance' | 'devex' | 'reliability'
+  | 'security' | 'maintenance' | 'compliance';
+
 export interface BaselinePattern {
   pattern_id: string;
   name: string;
-  category: 'architecture' | 'governance' | 'devex' | 'reliability' | 'security' | 'maintenance';
+  category: BaselineCategory;
   description: string;
   why_it_matters: string;
   detection_hints: string[];
@@ -241,6 +253,147 @@ const PATTERNS: BaselinePattern[] = [
     recommendation_when_missing: 'Define a URI scheme for your server (e.g., "myserver://"). Use consistent path segments. Add descriptions to every resource. Provide a resource list endpoint.',
     severity: 'medium',
   },
+
+  // -- Healthcare Compliance --------------------------------------------------
+  // These patterns evaluate whether an agentic dev tool produces code,
+  // architecture, and scaffolding that is safe for a healthcare software
+  // vendor to ship into PHI-touching production environments.
+  //
+  // The tools themselves do NOT handle PHI. But the software they help
+  // engineers build WILL. These patterns ensure compliance is baked in
+  // at the development tooling layer, not bolted on after the fact.
+  // ---------------------------------------------------------------------------
+
+  {
+    pattern_id: 'hc_encryption_at_rest',
+    name: 'Encrypted Storage by Default',
+    category: 'compliance',
+    description: 'Code generated or scaffolded by this tool must default to encrypted storage patterns. Database schemas, file storage, caching layers, and any persistence must use AES-256 (or equivalent FIPS-approved symmetric cipher) with proper key management. Plaintext storage of data that could contain PHI must never appear in generated code without an explicit opt-out documented in the architecture.',
+    why_it_matters: 'HIPAA 45 CFR § 164.312(a)(2)(iv) requires encryption of ePHI at rest. If the agentic dev tool scaffolds a service with plaintext storage, the healthcare vendor ships a HIPAA violation. Encryption must be the default, not an afterthought.',
+    detection_hints: ['generated code writes plaintext JSON or CSV without encryption', 'database schemas without column-level or disk-level encryption', 'file storage without AES-256', 'caching layers storing data in plaintext', 'no key management pattern in generated architecture', 'generated config lacks encryption toggles'],
+    recommendation_when_missing: 'All storage scaffolding must default to encrypted backends. Include AES-256-GCM encryption utilities in generated code. Provide key management patterns (envelope encryption, KMS integration hooks). Document that FIPS 140-2 validated modules are required in production.',
+    severity: 'critical',
+  },
+  {
+    pattern_id: 'hc_phi_boundary',
+    name: 'PHI Boundary Demarcation',
+    category: 'compliance',
+    description: 'Architecture guidance and code scaffolding produced by this tool must include explicit PHI boundary markers. Data flow designs must identify where PHI enters the system, how it transits between components, where it is stored, and where it exits. Components that handle PHI must be architecturally separated from those that do not, with clear interface contracts at each boundary crossing.',
+    why_it_matters: 'HIPAA requires the minimum necessary standard — PHI should only be accessible to components that need it. Without explicit boundaries, PHI leaks across services silently. A healthcare vendor needs to know exactly which components are "in scope" for HIPAA audits. Agentic dev tools that generate architecture without PHI boundaries force the vendor to retrofit them later, which is error-prone and expensive.',
+    detection_hints: ['no data classification in generated schemas', 'no distinction between PHI and non-PHI data flows', 'generated services with direct access to all data stores', 'no access control annotations on generated API endpoints', 'architecture diagrams without PHI boundary lines', 'no data inventory or classification guidance'],
+    recommendation_when_missing: 'Add PHI boundary annotations to generated architecture. Tag data fields as PHI/PII/non-sensitive in generated schemas. Generate separate service boundaries for PHI-touching and non-PHI components. Include data flow diagrams with PHI boundary markings in architecture outputs.',
+    severity: 'critical',
+  },
+  {
+    pattern_id: 'hc_fips_crypto',
+    name: 'FIPS 140-2 Crypto Readiness',
+    category: 'compliance',
+    description: 'All cryptographic operations in generated code must use FIPS 140-2 approved algorithms: AES-128/256, SHA-256/384/512, RSA-2048+, ECDSA P-256/P-384, HMAC-SHA256+. Generated code must never use MD5, SHA-1, DES, 3DES, RC4, or custom/homebrew crypto for any security-relevant purpose. Crypto utility modules must document FIPS mode requirements and provide configuration hooks for enabling FIPS-validated OpenSSL providers.',
+    why_it_matters: 'FIPS 140-2 (and its successor FIPS 140-3) is required by CMS MARS-E 2.2, NIST SP 800-171, and many state healthcare systems. Federal health data systems (Medicare, Medicaid, VA, DoD health) mandate FIPS-validated cryptography. If the dev tool generates code that uses non-FIPS algorithms, the healthcare vendor cannot deploy to these environments.',
+    detection_hints: ['MD5 or SHA-1 used for any hashing', 'DES or 3DES in generated encryption code', 'custom crypto implementations', 'no FIPS mode configuration in generated crypto utilities', 'RSA keys under 2048 bits', 'no documentation of FIPS requirements in generated READMEs', 'crypto libraries without FIPS-validated builds'],
+    recommendation_when_missing: 'Audit all crypto in generated code. Replace MD5/SHA-1 with SHA-256+. Replace DES/3DES with AES-256. Add FIPS mode configuration (Node.js: crypto.setFips(1), OpenSSL FIPS provider). Document that production deployments in healthcare require FIPS-compiled runtimes. Include a crypto compliance checklist in generated documentation.',
+    severity: 'critical',
+  },
+  {
+    pattern_id: 'hc_access_control',
+    name: 'Authentication and RBAC by Default',
+    category: 'compliance',
+    description: 'Generated API endpoints, services, and administrative interfaces must include authentication and role-based access control scaffolding by default. No endpoint should be unauthenticated unless explicitly documented as a public health endpoint. Generated auth must support unique user identification, session management, and automatic logoff.',
+    why_it_matters: 'HIPAA 45 CFR § 164.312(a)(1) requires access controls. § 164.312(a)(2)(i) requires unique user identification. § 164.312(a)(2)(iii) requires automatic logoff. If the dev tool scaffolds services without auth, every endpoint is a HIPAA violation waiting to be deployed. Healthcare vendors cannot ship unauthenticated services into production.',
+    detection_hints: ['generated API routes with no auth middleware', 'no RBAC model in generated code', 'admin endpoints without elevated auth', 'no session timeout in generated auth flows', 'generated APIs without rate limiting', 'no unique user ID in generated audit patterns', 'anonymous access to state-changing endpoints'],
+    recommendation_when_missing: 'All generated API scaffolding must include: auth middleware on every route (with explicit opt-out for public endpoints), RBAC with at least viewer/editor/admin roles, session management with configurable inactivity timeout (default 15 minutes per HIPAA guidance), and rate limiting. Include auth configuration in generated .env templates.',
+    severity: 'critical',
+  },
+  {
+    pattern_id: 'hc_audit_trail',
+    name: 'HIPAA-Grade Audit Logging',
+    category: 'compliance',
+    description: 'Generated services must include audit logging for all state-changing operations that captures: who (authenticated user ID), what (action performed), when (timestamp), on what (resource/record affected), and outcome (success/failure). Audit logs must be append-only, tamper-evident, and include guidance for 6-year retention per HIPAA requirements.',
+    why_it_matters: 'HIPAA 45 CFR § 164.312(b) requires audit controls. § 164.530(j) requires 6-year retention. Healthcare software without comprehensive audit trails cannot pass a HIPAA audit. If the dev tool generates services without audit logging, the vendor must retrofit it — which means inconsistent audit coverage, missed events, and audit gaps.',
+    detection_hints: ['generated services with no audit logging', 'state-changing operations without audit entries', 'audit logs missing actor or timestamp', 'mutable audit logs', 'no retention policy in generated log configuration', 'no correlation IDs across service calls', 'audit logs without tamper evidence'],
+    recommendation_when_missing: 'Generate audit logging middleware for every service. Log all CRUD operations, auth events, and admin actions. Include actor, action, target, timestamp, outcome, and correlation ID. Configure append-only log storage. Add retention policy documentation (minimum 6 years). Include tamper-evidence (hash chaining or HMAC signing) in the audit module.',
+    severity: 'critical',
+  },
+  {
+    pattern_id: 'hc_transmission_security',
+    name: 'TLS 1.2+ Transmission Security',
+    category: 'compliance',
+    description: 'All network communication in generated code must enforce TLS 1.2 or higher. Generated service configurations must disable TLS 1.0/1.1 and SSLv3. Certificate validation must be enforced — no generated code should include options to skip TLS verification in production. Inter-service communication must use mTLS or equivalent where feasible.',
+    why_it_matters: 'HIPAA 45 CFR § 164.312(e)(1) requires transmission security. PCI DSS (often co-required in healthcare billing) mandates TLS 1.2+. If the dev tool generates HTTP configurations that allow plaintext or weak TLS, the downstream service is vulnerable in transit.',
+    detection_hints: ['generated HTTP clients without TLS enforcement', 'NODE_TLS_REJECT_UNAUTHORIZED=0 in generated config', 'TLS 1.0 or 1.1 not explicitly disabled', 'no certificate pinning guidance', 'plaintext HTTP URLs in generated integration code', 'database connections without SSL/TLS', 'message queue connections without encryption in transit'],
+    recommendation_when_missing: 'All generated network code must use HTTPS. Generated server configs must explicitly disable TLS 1.0/1.1. Include TLS configuration in generated .env templates. Never generate code that skips certificate validation. Add mTLS examples for inter-service communication. Document minimum TLS version requirements in generated READMEs.',
+    severity: 'critical',
+  },
+  {
+    pattern_id: 'hc_minimum_necessary',
+    name: 'Minimum Necessary Data Pattern',
+    category: 'compliance',
+    description: 'Generated queries, API responses, and data access patterns must follow the minimum necessary principle. No SELECT * patterns in generated database queries. API response schemas must return only the fields needed for each operation. Generated data access layers must support field-level access control. Report and export functions must include field filtering.',
+    why_it_matters: 'HIPAA 45 CFR § 164.502(b) establishes the minimum necessary standard — covered entities must limit PHI use, disclosure, and requests to the minimum necessary. If the dev tool generates broad data access patterns, the downstream software over-exposes PHI in every query and response.',
+    detection_hints: ['SELECT * in generated queries', 'API responses returning entire database records', 'no field-level projection in generated data layers', 'generated export functions with no field filtering', 'no data minimization guidance in generated architecture', 'GraphQL schemas without field-level auth'],
+    recommendation_when_missing: 'Generate data access layers with explicit field selection. Use DTOs/view models in generated APIs — never return raw database entities. Add field-level access control hooks. Include data minimization guidance in generated architecture docs. Generate query builders that require explicit field lists.',
+    severity: 'high',
+  },
+  {
+    pattern_id: 'hc_error_sanitization',
+    name: 'Compliant Error Handling',
+    category: 'compliance',
+    description: 'Generated error responses must never leak PHI, PII, internal system details, stack traces, or database query text to clients. Error handlers must sanitize responses before returning them. Internal error details must be logged to the audit trail (not the client response). Generated validation errors must reference field names without echoing back sensitive field values.',
+    why_it_matters: 'PHI in error responses is a data breach. Stack traces reveal system internals useful for attacks. Database errors may include query fragments containing PHI. If the dev tool generates pass-through error handling, every exception in production risks exposing PHI or enabling exploitation.',
+    detection_hints: ['generated error handlers that pass raw exceptions to clients', 'stack traces in generated API error responses', 'database errors forwarded to HTTP responses', 'validation errors echoing back input values', 'no error sanitization middleware in generated code', 'generated catch blocks that return err.message directly'],
+    recommendation_when_missing: 'Generate error handling middleware that: returns generic client-safe error codes (not raw messages), logs full details to the audit trail, never echoes input values in validation errors, strips stack traces from production responses, and uses correlation IDs to link client errors to internal logs.',
+    severity: 'high',
+  },
+  {
+    pattern_id: 'hc_data_integrity',
+    name: 'Data Integrity Controls',
+    category: 'compliance',
+    description: 'Generated storage operations must include integrity verification. Database operations should use transactions. File operations should use atomic writes (write-to-temp, fsync, rename). Generated schemas must include constraints, foreign keys, and check constraints. Import/export operations must include checksums.',
+    why_it_matters: 'HIPAA 45 CFR § 164.312(c)(1) requires integrity controls to protect ePHI from improper alteration or destruction. Corrupted health data can have patient safety implications. If the dev tool generates storage patterns without integrity guarantees, the downstream software risks silent data corruption.',
+    detection_hints: ['generated write operations without transactions', 'no atomic write patterns in file storage', 'database schemas without constraints', 'import/export without checksums', 'no backup/restore patterns in generated architecture', 'optimistic writes without conflict detection'],
+    recommendation_when_missing: 'Generate data access layers with transactional boundaries. Include atomic write patterns for file operations. Add database constraints (NOT NULL, CHECK, FK) in generated schemas. Include checksum validation for data import/export. Generate backup/restore scaffolding with integrity verification.',
+    severity: 'high',
+  },
+  {
+    pattern_id: 'hc_baa_aware_integration',
+    name: 'BAA-Aware Third-Party Integration',
+    category: 'compliance',
+    description: 'When generating code that integrates with third-party services (cloud providers, APIs, SaaS tools, AI/ML services), the tool must flag that BAA status needs to be verified for any service that could process, store, or transmit PHI. Generated integration code must include comments or documentation markers identifying BAA-required touchpoints. Cloud service scaffolding must default to HIPAA-eligible service tiers.',
+    why_it_matters: 'HIPAA 45 CFR § 164.502(e) requires Business Associate Agreements with any entity that handles PHI on behalf of a covered entity. If the dev tool generates integrations with third-party services without BAA flags, the healthcare vendor may unknowingly send PHI to a non-BAA service — a direct HIPAA violation with breach notification obligations.',
+    detection_hints: ['third-party API integrations with no BAA documentation', 'cloud service scaffolding using non-HIPAA-eligible tiers', 'AI/ML API calls without BAA status comments', 'generated vendor integration code without compliance annotations', 'no BAA checklist in generated integration documentation'],
+    recommendation_when_missing: 'Add BAA compliance annotations to all generated third-party integration code. Include a BAA verification checklist in generated documentation. Default cloud service scaffolding to HIPAA-eligible tiers (AWS: BAA-covered services, Azure: HIPAA-compliant services, GCP: BAA-covered services). Flag AI/ML API integrations for BAA review.',
+    severity: 'high',
+  },
+  {
+    pattern_id: 'hc_supply_chain',
+    name: 'Supply Chain Security for Generated Code',
+    category: 'compliance',
+    description: 'Generated dependency manifests (package.json, requirements.txt, pom.xml, etc.) must pin exact versions — no caret or tilde ranges. Generated build pipelines must include dependency vulnerability scanning (npm audit, pip-audit, etc.). Generated projects must include SBOM generation configuration (SPDX or CycloneDX). Dependency allowlists must be provided for healthcare contexts.',
+    why_it_matters: 'Executive Order 14028 requires SBOM for software sold to federal agencies. FDA SaMD guidance recommends SBOM for medical software. Healthcare vendors must demonstrate supply chain integrity to auditors. If the dev tool generates projects with unpinned dependencies and no vulnerability scanning, the vendor inherits unknown supply chain risk.',
+    detection_hints: ['caret or tilde version ranges in generated manifests', 'no vulnerability scanning in generated CI pipelines', 'no SBOM generation configuration', 'generated projects pulling from unpinned registries', 'no dependency review step in generated PR workflows', 'no license compliance checking'],
+    recommendation_when_missing: 'Pin exact versions in all generated dependency manifests. Include npm audit / pip-audit / equivalent in generated CI pipelines. Add SBOM generation (CycloneDX or SPDX) to generated build configuration. Include a dependency governance section in generated docs that covers: version pinning policy, vulnerability scanning frequency, and license compliance.',
+    severity: 'high',
+  },
+  {
+    pattern_id: 'hc_breach_hooks',
+    name: 'Incident Response and Breach Detection Hooks',
+    category: 'compliance',
+    description: 'Generated architectures must include hooks for incident response and breach detection: anomaly detection on access patterns, alerting on bulk data exports, failed auth attempt tracking, and data access logging sufficient to scope a breach. Generated runbook scaffolding must include a breach response template.',
+    why_it_matters: 'The HIPAA Breach Notification Rule (45 CFR §§ 164.400-414) requires breach notification within 60 days. Scoping a breach requires knowing exactly what data was accessed, by whom, and when. If the dev tool generates services without breach detection capabilities, the healthcare vendor cannot meet breach notification timelines and may be unable to determine breach scope at all.',
+    detection_hints: ['no anomaly detection hooks in generated access layers', 'no alerting on bulk data operations', 'no failed auth tracking', 'no data access logging sufficient for breach scoping', 'no incident response template in generated documentation', 'no breach severity classification guidance'],
+    recommendation_when_missing: 'Generate access monitoring hooks: alert on bulk exports, track failed auth attempts, log all data access with sufficient detail for breach scoping. Include a breach response runbook template in generated docs. Add breach severity classification guidance. Include hooks for security incident event emission (SIEM integration).',
+    severity: 'high',
+  },
+  {
+    pattern_id: 'hc_hipaa_safeguard_coverage',
+    name: 'HIPAA Technical Safeguard Coverage',
+    category: 'compliance',
+    description: 'A meta-pattern that evaluates whether the generated server or tool addresses all four HIPAA Technical Safeguard categories: (1) Access Control — unique user IDs, emergency access, automatic logoff, encryption/decryption; (2) Audit Controls — record and examine activity; (3) Integrity Controls — protect data from improper alteration/destruction, authentication of transmitted data; (4) Transmission Security — integrity controls and encryption for data in transit. Each category must have at least one concrete implementation pattern in the generated architecture.',
+    why_it_matters: 'HIPAA Technical Safeguards (45 CFR § 164.312) are the regulatory floor for any system handling ePHI. A healthcare vendor must demonstrate coverage of all four categories. If even one category is missing from the generated architecture, the vendor has a regulatory gap that will be found in audit. This meta-pattern ensures nothing is missed.',
+    detection_hints: ['no access control pattern in generated architecture', 'no audit logging in generated services', 'no data integrity controls', 'no transmission encryption enforcement', 'generated architecture missing one or more HIPAA Technical Safeguard categories', 'no HIPAA compliance section in generated documentation'],
+    recommendation_when_missing: 'Add a HIPAA Technical Safeguard compliance section to the generated architecture document. Map each safeguard to concrete implementation: Access Control → auth middleware + RBAC + session management; Audit Controls → audit logging + tamper evidence; Integrity → transactions + checksums + atomic writes; Transmission → TLS 1.2+ + mTLS. Include a compliance verification checklist.',
+    severity: 'critical',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -251,7 +404,7 @@ export function getAllPatterns(): BaselinePattern[] {
   return [...PATTERNS];
 }
 
-export function getPatternsByCategory(category: BaselinePattern['category']): BaselinePattern[] {
+export function getPatternsByCategory(category: BaselineCategory): BaselinePattern[] {
   return PATTERNS.filter((p) => p.category === category);
 }
 
@@ -260,10 +413,26 @@ export function getCriticalPatterns(): BaselinePattern[] {
 }
 
 /**
+ * Get all healthcare compliance patterns. These evaluate whether an agentic
+ * dev tool produces code/architecture safe for healthcare software vendors.
+ */
+export function getCompliancePatterns(): BaselinePattern[] {
+  return PATTERNS.filter((p) => p.category === 'compliance');
+}
+
+/**
+ * Get compliance patterns by severity. Useful for phased rollout —
+ * enforce critical patterns first, then add high/medium.
+ */
+export function getCompliancePatternsBySeverity(severity: BaselinePattern['severity']): BaselinePattern[] {
+  return PATTERNS.filter((p) => p.category === 'compliance' && p.severity === severity);
+}
+
+/**
  * Build a baseline evaluation prompt section that can be injected into
  * research prompts. This teaches the agent WHAT good looks like.
  */
-export function buildBaselinePromptSection(categories?: BaselinePattern['category'][]): string {
+export function buildBaselinePromptSection(categories?: BaselineCategory[]): string {
   const patterns = categories
     ? PATTERNS.filter((p) => categories.includes(p.category))
     : getCriticalPatterns();
@@ -277,6 +446,41 @@ export function buildBaselinePromptSection(categories?: BaselinePattern['categor
     lines.push(`### ${p.name} [${p.severity}]`);
     lines.push(p.description);
     lines.push(`**Why**: ${p.why_it_matters}`);
+    lines.push(`**Look for**: ${p.detection_hints.join('; ')}`);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Build a healthcare compliance evaluation prompt section. Injected into
+ * research prompts when the target server has a healthcare compliance profile.
+ *
+ * Key framing: the target server is an agentic dev tool. It does NOT handle
+ * PHI. But the software it helps build WILL. These patterns evaluate whether
+ * the tool produces compliant output.
+ */
+export function buildCompliancePromptSection(): string {
+  const compliancePatterns = getCompliancePatterns();
+
+  const lines = [
+    '## Healthcare Compliance Patterns (evaluate the server against these)',
+    '',
+    'IMPORTANT CONTEXT: The target server is an agentic development tool. It does NOT handle PHI directly.',
+    'However, the software that this tool helps build WILL handle PHI in a healthcare production environment.',
+    'Evaluate whether the tool produces code, architecture, and scaffolding that meets healthcare regulatory requirements.',
+    '',
+    'Regulatory framework: HIPAA Technical Safeguards (45 CFR § 164.312), FIPS 140-2/140-3,',
+    'HIPAA Breach Notification Rule (45 CFR §§ 164.400-414), NIST SP 800-171, CMS MARS-E 2.2,',
+    'Executive Order 14028 (SBOM), FDA SaMD guidance where applicable.',
+    '',
+  ];
+
+  for (const p of compliancePatterns) {
+    lines.push(`### ${p.name} [${p.severity}]`);
+    lines.push(p.description);
+    lines.push(`**Regulatory basis**: ${p.why_it_matters}`);
     lines.push(`**Look for**: ${p.detection_hints.join('; ')}`);
     lines.push('');
   }
@@ -343,6 +547,20 @@ Run this verification after implementing changes. Report any issues found.
 34. **CHANGELOG entry** — Does a CHANGELOG (or equivalent) have an entry for the changes made? Flag if missing.
 35. **No phantom doc references** — Search documentation for tool names, config keys, file paths, or module names that no longer exist in code. Every one is a stale reference.
 36. **Example code validity** — Do code examples in documentation use current API signatures, parameter names, and tool names? Flag any that reference old or removed interfaces.
+
+### Healthcare Compliance (when compliance profile is active)
+
+37. **Encryption defaults** — Does generated storage code default to AES-256 encryption? Flag any plaintext persistence patterns.
+38. **PHI boundary markers** — Does generated architecture include explicit PHI boundary demarcation? Flag data flows without classification.
+39. **FIPS crypto compliance** — Does generated code use only FIPS 140-2 approved algorithms? Flag MD5, SHA-1, DES, 3DES, RC4, custom crypto.
+40. **Auth scaffolding** — Do generated APIs include auth middleware and RBAC by default? Flag unauthenticated endpoints.
+41. **Audit logging** — Do generated services include audit logging for state-changing operations? Flag services without audit middleware.
+42. **TLS enforcement** — Does generated network code enforce TLS 1.2+? Flag plaintext HTTP, disabled cert validation, TLS 1.0/1.1.
+43. **Minimum necessary** — Do generated queries use explicit field selection? Flag SELECT * and full-record API responses.
+44. **Error sanitization** — Do generated error handlers strip PHI and stack traces from client responses? Flag pass-through error handling.
+45. **BAA annotations** — Do generated third-party integrations include BAA verification flags? Flag unmarked external service integrations.
+46. **Supply chain** — Do generated manifests pin exact versions? Is vulnerability scanning in generated CI? Flag caret/tilde ranges.
+47. **HIPAA coverage** — Does generated architecture address all four Technical Safeguard categories (Access, Audit, Integrity, Transmission)?
 
 Return findings as structured JSON — same format as research findings.`;
 }

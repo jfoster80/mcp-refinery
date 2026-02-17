@@ -284,6 +284,7 @@ export function startPipeline(input: {
 export function advancePipeline(
   pipelineId: string,
   agentInput?: Record<string, unknown>,
+  options?: { force_advance?: boolean; complete_overlay?: boolean },
 ): StepResult | null {
   const pipeline = store().get(pipelineId);
   if (!pipeline) return null;
@@ -292,10 +293,94 @@ export function advancePipeline(
     pipeline.data = { ...pipeline.data, ...agentInput };
   }
 
+  // Force advance: skip current overlay entirely
+  if (options?.force_advance || options?.complete_overlay) {
+    pipeline.updated_at = new Date().toISOString();
+    recordAudit('pipeline.advance', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+      action: options.force_advance ? 'force_advance' : 'complete_overlay',
+      skipped_overlay: pipeline.overlays[pipeline.overlay_index],
+    });
+    return advanceToNextOverlay(pipeline as PipelineState);
+  }
+
+  // Sync: detect work completed via individual tools before executing
+  const synced = syncWithIndividualTools(pipeline as PipelineState);
+  if (synced) return synced;
+
   pipeline.step_within_overlay++;
   pipeline.updated_at = new Date().toISOString();
 
-  return executeCurrentStep(pipeline as PipelineState, undefined);
+  // Persist state before executing to prevent data loss on error
+  store().update(pipeline.pipeline_id, pipeline);
+
+  try {
+    return executeCurrentStep(pipeline as PipelineState, undefined);
+  } catch (e) {
+    pipeline.status = 'error';
+    pipeline.error_message = `Overlay "${pipeline.overlays[pipeline.overlay_index]}" failed: ${e instanceof Error ? e.message : String(e)}`;
+    store().update(pipeline.pipeline_id, pipeline);
+    return stepResult(pipeline as PipelineState, overlay_label(pipeline.overlays[pipeline.overlay_index] as OverlayName),
+      pipeline.error_message, 'error', {
+        control: 'user',
+        description: `Error in overlay. Use force_advance=true to skip, or fix the issue and retry.`,
+        bootstrap_prompt: `Pipeline error: ${pipeline.error_message}\n\nOptions:\n- Fix the issue and call pipeline_next again\n- Use pipeline_next with force_advance=true to skip this overlay\n- Use the individual tools directly (research_store, research_consensus, etc.)`,
+      });
+  }
+}
+
+/**
+ * Check if the current overlay was already completed via individual tool calls
+ * (e.g., research_store + research_consensus done outside the pipeline).
+ * If so, auto-advance the pipeline to stay in sync.
+ */
+function syncWithIndividualTools(pipeline: PipelineState): StepResult | null {
+  const overlay = pipeline.overlays[pipeline.overlay_index];
+  const serverId = pipeline.target_server_id;
+
+  if (overlay === 'research') {
+    const consensus = getLatestConsensus(serverId);
+    if (consensus && consensus.findings.length > 0) {
+      pipeline.data.consensus_id = consensus.consensus_id;
+      pipeline.data.findings_count = consensus.findings.length;
+      pipeline.data.agreement = consensus.overall_agreement;
+      pipeline.data.synced_from_individual_tools = true;
+      recordAudit('pipeline.sync', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+        overlay: 'research', reason: 'consensus already computed via individual tools',
+      });
+      bridgeToResearchOps(pipeline);
+      return advanceToNextOverlay(pipeline);
+    }
+
+    // Also check if sufficient research feeds exist but consensus hasn't been computed yet
+    const feeds = getResearchFeeds(serverId);
+    if (feeds.length >= 3) {
+      const consensus2 = computeConsensus(feeds, serverId);
+      insertConsensusResult(consensus2);
+      pipeline.data.consensus_id = consensus2.consensus_id;
+      pipeline.data.findings_count = consensus2.findings.length;
+      pipeline.data.agreement = consensus2.overall_agreement;
+      pipeline.data.synced_from_individual_tools = true;
+      recordAudit('pipeline.sync', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+        overlay: 'research', reason: `auto-computed consensus from ${feeds.length} individual feeds`,
+      });
+      bridgeToResearchOps(pipeline);
+      return advanceToNextOverlay(pipeline);
+    }
+  }
+
+  if (overlay === 'triage') {
+    const proposals = listProposals(serverId, 'triaged');
+    if (proposals.length > 0) {
+      pipeline.data.actionable_count = proposals.length;
+      pipeline.data.synced_from_individual_tools = true;
+      recordAudit('pipeline.sync', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+        overlay: 'triage', reason: `${proposals.length} proposals already triaged via individual tools`,
+      });
+      return advanceToNextOverlay(pipeline);
+    }
+  }
+
+  return null;
 }
 
 export function getPipeline(id: string): PipelineState | null {
@@ -358,6 +443,11 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
   const agentNames = engagedNames(pipeline, ['researcher', 'security_auditor']);
   const hasExternalContent = Boolean(pipeline.data.research_content);
 
+  // Findings arrive via `input` (direct startPipeline call) or `pipeline.data`
+  // (advancePipeline merges agentInput into pipeline.data, then passes undefined
+  // as initialInput). Check both locations so findings are never silently dropped.
+  const agentFindings = (input?.findings ?? pipeline.data.findings) as unknown[] | undefined;
+
   // ---- External content path: article was provided, agent extracts findings ----
   if (hasExternalContent && step === 0) {
     const content = pipeline.data.research_content as string;
@@ -382,17 +472,20 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
     });
   }
 
-  if (hasExternalContent && step > 0 && input?.findings) {
+  if (hasExternalContent && step > 0 && agentFindings) {
     const perspectives = (pipeline.data.ingest_perspectives ?? []) as unknown as ResearchPerspective[];
     const idx = (pipeline.data.perspectives_done as number) ?? 0;
     const current = perspectives[idx];
 
     if (current) {
-      const sanitized = sanitizeFindings(input.findings as unknown[]);
+      const sanitized = sanitizeFindings(agentFindings);
       const hash = `external-${current}-${pipeline.pipeline_id}`;
       storeFindings(serverId, current, hash, sanitized);
       pipeline.data.perspectives_done = idx + 1;
     }
+
+    // Clear processed findings so stale data doesn't re-trigger on next advance
+    delete pipeline.data.findings;
 
     const done = (pipeline.data.perspectives_done as number) ?? 0;
     const total = (pipeline.data.perspectives_total as number) ?? 1;
@@ -458,16 +551,19 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
     });
   }
 
-  if (!hasExternalContent && step > 0 && input?.findings) {
+  if (!hasExternalContent && step > 0 && agentFindings) {
     const prompts = pipeline.data.research_prompts as Array<{ perspective: string; prompt_hash: string }>;
     const idx = (pipeline.data.perspectives_done as number) ?? 0;
     const current = prompts[idx];
 
     if (current) {
-      const sanitized = sanitizeFindings(input.findings as unknown[]);
+      const sanitized = sanitizeFindings(agentFindings);
       storeFindings(serverId, current.perspective as ResearchPerspective, current.prompt_hash, sanitized);
       pipeline.data.perspectives_done = idx + 1;
     }
+
+    // Clear processed findings so stale data doesn't re-trigger on next advance
+    delete pipeline.data.findings;
 
     const done = (pipeline.data.perspectives_done as number) ?? 0;
     const total = (pipeline.data.perspectives_total as number) ?? 1;
@@ -497,13 +593,28 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
     return advanceToNextOverlay(pipeline);
   }
 
-  // Fallback — waiting for findings
+  // Diagnostic fallback — explain WHY the pipeline is stuck
+  const diagParts: string[] = [];
+  if (!hasExternalContent) diagParts.push('no research_content in pipeline data');
+  if (step === 0) diagParts.push('still at initial step (step_within_overlay=0)');
+  if (!agentFindings) diagParts.push('no findings submitted — pass findings array via pipeline_next');
+  if (step > 0 && !agentFindings) diagParts.push('findings may have been lost during pipeline state round-trip');
+  const diagnosis = diagParts.length > 0 ? ` Diagnosis: ${diagParts.join('; ')}.` : '';
+
+  const reqPersp = hasExternalContent
+    ? ((pipeline.data.ingest_perspectives ?? []) as unknown as string[])
+    : ['security', 'reliability', 'compliance', 'devex', 'performance'];
+  const done = (pipeline.data.perspectives_done as number) ?? 0;
+
   pipeline.status = 'waiting_agent';
   store().update(pipeline.pipeline_id, pipeline);
-  return stepResult(pipeline, overlay_label('research'), 'Waiting for research findings.', 'waiting_agent', {
+  return stepResult(pipeline, overlay_label('research'),
+    `Waiting for research findings.${diagnosis}`, 'waiting_agent', {
     control: 'agent',
-    description: 'Submit findings via pipeline_next.',
-    bootstrap_prompt: `Use pipeline_next with pipeline_id="${pipeline.pipeline_id}" and findings=[...your analysis...]`,
+    description: diagParts.length > 0
+      ? `Stuck: ${diagParts.join('; ')}. Use force_advance=true to skip, or submit findings.`
+      : 'Submit findings via pipeline_next.',
+    bootstrap_prompt: `Pipeline stalled at research overlay.${diagnosis}\n\nOptions:\n1. Submit findings: pipeline_next with pipeline_id="${pipeline.pipeline_id}" findings=[...]\n2. Force advance: pipeline_next with pipeline_id="${pipeline.pipeline_id}" force_advance=true\n3. Use individual tools: research_store, then research_consensus\n\nRequired perspectives: ${reqPersp.join(', ')} (${done}/${reqPersp.length} done)`,
   });
 }
 
@@ -854,6 +965,76 @@ function completedResult(pipeline: PipelineState): StepResult {
     description: 'Pipeline complete. Start a new cycle when ready.',
     bootstrap_prompt: `Pipeline ${pipeline.pipeline_id} complete.\nCommand: ${pipeline.command} | Overlays: ${pipeline.overlays.join(' → ')}\n\nTo start a new cycle: use refine again.`,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline Requirements — structured guidance for pipeline_status
+// ---------------------------------------------------------------------------
+
+export function getOverlayRequirements(pipeline: PipelineState): Record<string, unknown> {
+  const overlay = pipeline.overlays[pipeline.overlay_index];
+  if (!overlay) return { status: 'completed' };
+
+  const base = {
+    current_overlay: overlay,
+    can_force_advance: true,
+    force_advance_hint: `Use pipeline_next with pipeline_id="${pipeline.pipeline_id}" and force_advance=true to skip this overlay.`,
+  };
+
+  switch (overlay) {
+    case 'research': {
+      const total = (pipeline.data.perspectives_total as number) ?? 0;
+      const done = (pipeline.data.perspectives_done as number) ?? 0;
+      const perspectives = (pipeline.data.ingest_perspectives as unknown as string[])
+        ?? (pipeline.data.research_prompts as Array<{ perspective: string }> ?? []).map((p) => p.perspective)
+        ?? [];
+      const hasContent = Boolean(pipeline.data.research_content);
+      return {
+        ...base,
+        waiting_for: 'research_findings',
+        has_external_content: hasContent,
+        perspectives_required: perspectives.length > 0 ? perspectives : ['security', 'reliability', 'compliance', 'devex', 'performance'],
+        perspectives_completed: done,
+        perspectives_total: total || perspectives.length || 5,
+        next_perspective: perspectives[done] ?? null,
+        data_format: 'findings array with { claim, recommendation, expected_impact, risk, evidence }',
+        instructions: done < (total || 5)
+          ? `Submit findings for "${perspectives[done] ?? 'next'}" perspective via pipeline_next, or use force_advance=true to skip.`
+          : 'All perspectives done. Call pipeline_next to compute consensus and advance.',
+        alternative: 'Use research_store + research_consensus individually, then pipeline_next will auto-detect completion.',
+      };
+    }
+    case 'align':
+      return {
+        ...base,
+        waiting_for: 'user_approval',
+        instructions: 'Review proposed changes above and approve via governance_approve, then call pipeline_next.',
+        alignment_summary: pipeline.data.alignment_summary ?? null,
+      };
+    case 'triage':
+      return {
+        ...base,
+        waiting_for: 'triage_completion',
+        instructions: 'Triage runs automatically. If stuck, call pipeline_next or use improvements_triage individually.',
+      };
+    case 'plan':
+    case 'execute':
+    case 'cleanup':
+    case 'document':
+      return {
+        ...base,
+        waiting_for: 'agent_action',
+        instructions: `Agent should complete the "${overlay}" step, then call pipeline_next.`,
+      };
+    case 'release':
+      return {
+        ...base,
+        waiting_for: 'release_approval',
+        instructions: 'Use delivery_release to create the release, then call pipeline_next.',
+      };
+    default:
+      return base;
+  }
 }
 
 // ---------------------------------------------------------------------------
