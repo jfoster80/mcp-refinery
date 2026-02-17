@@ -540,27 +540,30 @@ Run this verification after implementing changes. Report any issues found.
 
 ### Documentation Currency (for every change)
 
-30. **README tool inventory sync** — List all tools registered in code. List all tools described in README. The two lists must match exactly. Flag any tool in code but not in README, or in README but not in code.
+30. **README tool inventory sync** — List all tools registered in code (grep for server.tool\(). List all tools described in README. The two lists must match exactly. Flag any tool in code but not in README, or in README but not in code. Include tool count comparison.
 31. **Setup instructions validity** — Read the setup/install section. Does it reference current dependencies, correct commands, and valid config? Flag outdated steps.
 32. **Configuration reference completeness** — List all process.env reads and config accesses in code. Every one must appear in the documentation. Flag any undocumented config.
-33. **Architecture doc accuracy** — Does the architecture documentation describe the current module structure, overlay order, and data flow? Flag references to removed or renamed modules.
+33. **Architecture doc accuracy** — Does the architecture documentation describe the current module structure, overlay order, and data flow? Compare COMMAND_OVERLAYS in orchestrator.ts with overlay sequences in ARCHITECTURE.md. Flag references to removed or renamed modules.
 34. **CHANGELOG entry** — Does a CHANGELOG (or equivalent) have an entry for the changes made? Flag if missing.
 35. **No phantom doc references** — Search documentation for tool names, config keys, file paths, or module names that no longer exist in code. Every one is a stale reference.
 36. **Example code validity** — Do code examples in documentation use current API signatures, parameter names, and tool names? Flag any that reference old or removed interfaces.
+37. **Diagram accuracy** — Do Mermaid or ASCII diagrams in docs reflect actual code flow? Compare pipeline diagrams with COMMAND_OVERLAYS, agent diagrams with registry.ts, storage diagrams with database.ts stores. Flag any diagram showing removed stages, missing new stages, or incorrect relationships.
+38. **Documentation guide self-consistency** — Does buildDocumentationGuide() in baselines.ts reference the current set of required documentation artifacts? Flag if the guide references artifacts the system no longer produces or misses new ones.
+39. **Feedback loop integration** — After pipeline completion, was a feedback entry recorded? Check that strengths, weaknesses, and lessons are captured. Flag pipelines that completed without feedback.
 
 ### Healthcare Compliance (when compliance profile is active)
 
-37. **Encryption defaults** — Does generated storage code default to AES-256 encryption? Flag any plaintext persistence patterns.
-38. **PHI boundary markers** — Does generated architecture include explicit PHI boundary demarcation? Flag data flows without classification.
-39. **FIPS crypto compliance** — Does generated code use only FIPS 140-2 approved algorithms? Flag MD5, SHA-1, DES, 3DES, RC4, custom crypto.
-40. **Auth scaffolding** — Do generated APIs include auth middleware and RBAC by default? Flag unauthenticated endpoints.
-41. **Audit logging** — Do generated services include audit logging for state-changing operations? Flag services without audit middleware.
-42. **TLS enforcement** — Does generated network code enforce TLS 1.2+? Flag plaintext HTTP, disabled cert validation, TLS 1.0/1.1.
-43. **Minimum necessary** — Do generated queries use explicit field selection? Flag SELECT * and full-record API responses.
-44. **Error sanitization** — Do generated error handlers strip PHI and stack traces from client responses? Flag pass-through error handling.
-45. **BAA annotations** — Do generated third-party integrations include BAA verification flags? Flag unmarked external service integrations.
-46. **Supply chain** — Do generated manifests pin exact versions? Is vulnerability scanning in generated CI? Flag caret/tilde ranges.
-47. **HIPAA coverage** — Does generated architecture address all four Technical Safeguard categories (Access, Audit, Integrity, Transmission)?
+40. **Encryption defaults** — Does generated storage code default to AES-256 encryption? Flag any plaintext persistence patterns.
+41. **PHI boundary markers** — Does generated architecture include explicit PHI boundary demarcation? Flag data flows without classification.
+42. **FIPS crypto compliance** — Does generated code use only FIPS 140-2 approved algorithms? Flag MD5, SHA-1, DES, 3DES, RC4, custom crypto.
+43. **Auth scaffolding** — Do generated APIs include auth middleware and RBAC by default? Flag unauthenticated endpoints.
+44. **Audit logging** — Do generated services include audit logging for state-changing operations? Flag services without audit middleware.
+45. **TLS enforcement** — Does generated network code enforce TLS 1.2+? Flag plaintext HTTP, disabled cert validation, TLS 1.0/1.1.
+46. **Minimum necessary** — Do generated queries use explicit field selection? Flag SELECT * and full-record API responses.
+47. **Error sanitization** — Do generated error handlers strip PHI and stack traces from client responses? Flag pass-through error handling.
+48. **BAA annotations** — Do generated third-party integrations include BAA verification flags? Flag unmarked external service integrations.
+49. **Supply chain** — Do generated manifests pin exact versions? Is vulnerability scanning in generated CI? Flag caret/tilde ranges.
+50. **HIPAA coverage** — Does generated architecture address all four Technical Safeguard categories (Access, Audit, Integrity, Transmission)?
 
 Return findings as structured JSON — same format as research findings.`;
 }
@@ -750,84 +753,155 @@ Verification checklist:
  * the `document` overlay's bootstrap prompt.
  */
 export function buildDocumentationGuide(): string {
-  return `## Documentation Update Requirements
+  return `## Gold Standard Documentation Requirements
 
-Documentation ships with code. Every change that adds, removes, or modifies tools, resources, configuration, or architecture MUST update the corresponding documentation before the pipeline can proceed to release.
+Documentation is a first-class deliverable — not an afterthought. Every change that adds, removes, or modifies tools, resources, configuration, or architecture MUST update documentation before the pipeline proceeds to release. Documentation must be optimized for **human readability** with visual aids where they add clarity.
+
+### Design Principles for Documentation
+
+1. **Lead with WHY, not WHAT** — Explain the purpose and mental model before listing parameters
+2. **Use diagrams for flow** — Mermaid diagrams for pipelines, state machines, and data flows
+3. **Show, don't tell** — Concrete examples over abstract descriptions
+4. **Progressive disclosure** — Quick-start first, deep-dive later
+5. **Machine-readable AND human-readable** — Structured tables for tools, prose for concepts
 
 ### Required Documentation Artifacts
 
 #### 1. README.md — The Entry Point
 
-The README is the first thing users and agents read. It MUST contain:
+The README is the first thing users and agents read. Structure it for progressive disclosure:
 
-**Tool Inventory Table** — Every registered tool with:
-- Tool name (exact match to code registration)
-- One-line description of what it does
-- Required vs optional parameters
-- Brief usage example or link to detailed docs
+**System Description** — 2-3 sentences explaining WHAT the system does and WHY it exists. Written for a human who has never heard of MCP. Include a Mermaid diagram showing the high-level flow:
 
-**Setup Instructions** — Must work for a fresh clone:
-- Prerequisites (Node.js version, required API keys, etc.)
-- Install steps (\`npm install\`, env config, etc.)
-- How to run (stdio, HTTP, etc.)
-- How to verify it works (a smoke-test command or example)
+\`\`\`mermaid
+graph LR
+  A[User Intent] --> B[Research]
+  B --> C[Decision]
+  C --> D{Align?}
+  D -->|Approved| E[Execute]
+  D -->|Rejected| F[Redirect]
+  E --> G[Cleanup]
+  G --> H[Release]
+\`\`\`
 
-**Configuration Reference** — Every configurable option:
-- Environment variables with descriptions and defaults
-- Config file format and location
-- Required vs optional settings
+**Tool Catalog** — Every registered tool in a structured table with:
+| Column | Description |
+|--------|-------------|
+| Tool name | Exact match to code registration |
+| Category | Facade / Research / Decision / Delivery / Governance / Routing / Knowledge |
+| Description | What it does, when to use it (1-2 sentences) |
+| Key params | Required parameters with types |
+| Returns | What to expect in the response |
 
-**Quick-Start Examples** — At least one working example showing:
-- How to connect to the server
-- How to call the most common tool
-- What the response looks like
+Group tools by category. Facade tools go first with a clear "START HERE" marker.
 
-#### 2. Architecture Documentation
+**Quick-Start** — A working example from zero to first result:
+- Prerequisites, install, run commands
+- A single copy-paste example that produces output
+- What the output means
 
-If the server has more than a few files, maintain an architecture overview:
-- Module/directory structure with brief descriptions
-- Data flow diagram (can be text-based, e.g., mermaid)
-- Key design decisions and why they were made
-- Integration points (external APIs, databases, other servers)
+**Configuration Reference** — Every env var and config option:
+- Name, type, default, description
+- Grouped by concern (storage, routing, keys)
 
-Update this whenever:
+#### 2. Architecture Documentation (ARCHITECTURE.md)
+
+For any system with more than a few files, maintain a living architecture document:
+
+**System Diagram** — Use a Mermaid diagram showing the major components and their relationships:
+
+\`\`\`mermaid
+graph TD
+  subgraph "Tool Layer"
+    F[Facade Tools]
+    I[Internal Tools]
+  end
+  subgraph "Processing Planes"
+    R[Research] --> D[Decision] --> DL[Delivery]
+  end
+  subgraph "Infrastructure"
+    S[Storage] --> A[Audit]
+    V[Vector Index]
+  end
+  F --> R
+  I --> D
+  DL --> S
+\`\`\`
+
+**Pipeline Flow Diagram** — For systems with pipelines or state machines, include a Mermaid flowchart showing the overlay sequence, decision points, and user gates:
+
+\`\`\`mermaid
+flowchart TD
+  START([User: refine]) --> RESEARCH[Research\\n5 perspectives]
+  RESEARCH --> CLASSIFY[Classify\\ncomplexity + tier]
+  CLASSIFY --> TRIAGE[Triage\\nranked proposals]
+  TRIAGE --> ALIGN{{"⚡ ALIGN\\nUser approves?"}}
+  ALIGN -->|Yes| PLAN[Plan\\ndelivery strategy]
+  ALIGN -->|No| REDIRECT[Redirect]
+  PLAN --> EXECUTE[Execute\\nPR creation]
+  EXECUTE --> CLEANUP[Cleanup\\nverification]
+  CLEANUP --> DOCUMENT[Document\\ndocs update]
+  DOCUMENT --> RELEASE[Release\\nSemVer]
+  RELEASE --> PROPAGATE[Propagate\\ncross-server]
+\`\`\`
+
+**Module Map** — Directory tree with brief descriptions of each module's purpose.
+
+**Key Decisions** — Why major architectural choices were made (link to ADRs where available).
+
+Update architecture docs whenever:
 - New modules or directories are added
-- Data flow changes
-- New external integrations are added
-- Pipeline or overlay structure changes
+- Pipeline overlay order changes
+- New storage collections are added
+- Agent roster or model routing changes
+- New tool categories are introduced
 
 #### 3. CHANGELOG
 
-Maintain a CHANGELOG.md (or equivalent section in README) with:
+Maintain a CHANGELOG.md (or section in README) with:
 - Version or date
-- What changed (added, changed, removed, fixed)
-- Migration notes if breaking changes were introduced
+- What changed: added / changed / removed / fixed
+- Migration notes for breaking changes
+- Link to the pipeline or proposal that drove the change
 
 #### 4. Inline Documentation
 
 Exported functions and types MUST have JSDoc/TSDoc:
-- What the function does
-- Parameter descriptions
-- Return type and meaning
-- Example usage for complex functions
+- What the function does (one sentence)
+- @param descriptions for non-obvious parameters
+- @returns description of return shape
+- Example usage for functions with complex signatures
+
+### Diagram Requirements
+
+When documentation describes a flow, state machine, or architecture:
+
+1. **Prefer Mermaid** — Renderable in GitHub, Cursor, VS Code, and most doc systems
+2. **Use flowchart for pipelines** — Shows decision points, gates, and branches
+3. **Use graph for architecture** — Shows component relationships
+4. **Use sequenceDiagram for interactions** — Shows tool call chains and agent handoffs
+5. **Keep diagrams in sync with code** — When overlay order changes in COMMAND_OVERLAYS, update the pipeline diagram. When agents change in registry.ts, update the agent diagram.
+6. **One diagram per concept** — Don't overload a single diagram. Multiple focused diagrams are better than one complex one.
 
 ### Verification Checklist
 
 Before marking documentation complete:
 
-1. **Tool-to-doc sync** — List all tools registered in code. List all tools in README. The two lists must match exactly. Flag any mismatch.
-2. **Setup smoke test** — Read the setup instructions as if you are a new user. Would they work on a fresh machine? Flag any missing steps.
-3. **Config completeness** — List all \`process.env\` reads and config file accesses. Every one must appear in the configuration reference.
-4. **Architecture accuracy** — Does the architecture doc describe the current module structure? Flag any references to removed or renamed modules.
-5. **CHANGELOG entry** — Does the CHANGELOG have an entry for the changes made in this pipeline? Flag if missing.
-6. **No phantom references** — Search docs for tool names, config keys, or module names that no longer exist in code. Every one is a bug.
-7. **Example validity** — Do code examples in docs use current API signatures? Flag any that reference old parameter names or removed tools.
+1. **Tool-to-doc sync** — grep for server.tool( in code. Count tools in README catalog. Numbers must match exactly.
+2. **Diagram accuracy** — Compare pipeline diagrams with COMMAND_OVERLAYS in orchestrator.ts. All stages must appear in correct order.
+3. **Setup smoke test** — Read setup instructions as a new user. Would they work on a fresh machine?
+4. **Config completeness** — List all process.env reads in code. Every one must appear in docs.
+5. **Architecture accuracy** — Does ARCHITECTURE.md describe the current module structure? Flag stale references.
+6. **CHANGELOG entry** — Does the CHANGELOG have an entry for this pipeline's changes?
+7. **No phantom references** — Search docs for tool names, config keys, or modules that no longer exist in code.
+8. **Example validity** — Do code examples use current API signatures and parameter names?
+9. **Mermaid renderability** — Verify all Mermaid code blocks render correctly (valid syntax, no broken references).
 
 ### What NOT to Document
 
-- Internal implementation details that change frequently (document the interface, not the internals)
-- Auto-generated content that a build step produces (document where to find it, not the content itself)
-- Secrets, API keys, or credentials (document that they are needed and where to set them, never the values)
+- Internal implementation details that change frequently (document the interface, not internals)
+- Auto-generated content from build steps (document where to find it)
+- Secrets or credentials (document that they're needed and where to set them, never values)
 
 Return findings as structured JSON — same format as research findings.`;
 }
@@ -973,4 +1047,79 @@ export function matchFindingsToBaselines(
   }
 
   return matches;
+}
+
+// ---------------------------------------------------------------------------
+// Continuous Improvement — Feedback Prompt Integration
+// ---------------------------------------------------------------------------
+
+import type { FeedbackEntry } from '../types/index.js';
+
+/**
+ * Build a feedback prompt section that injects lessons learned from past
+ * pipeline runs into research prompts. This creates the learning loop:
+ *
+ *   improve → feedback → research (informed by feedback) → improve (better)
+ *
+ * The section is injected into research prompts so the agent starts each
+ * cycle with institutional memory, not a blank slate.
+ */
+export function buildFeedbackPromptSection(feedback: FeedbackEntry[]): string {
+  if (feedback.length === 0) {
+    return '';
+  }
+
+  const sections: string[] = [];
+  sections.push('## Institutional Memory — Lessons from Past Pipelines');
+  sections.push('');
+  sections.push('The following strengths and weaknesses were captured from previous improvement cycles.');
+  sections.push('Use these to focus your analysis: reinforce what works, address what failed.');
+  sections.push('');
+
+  // Aggregate strengths and weaknesses across recent feedback
+  const strengthMap = new Map<string, number>();
+  const weaknessMap = new Map<string, number>();
+  const lessonMap = new Map<string, number>();
+
+  for (const entry of feedback.slice(0, 10)) {
+    for (const s of entry.strengths) {
+      strengthMap.set(s, (strengthMap.get(s) ?? 0) + 1);
+    }
+    for (const w of entry.weaknesses) {
+      weaknessMap.set(w, (weaknessMap.get(w) ?? 0) + 1);
+    }
+    for (const l of entry.lessons_learned) {
+      lessonMap.set(l, (lessonMap.get(l) ?? 0) + 1);
+    }
+  }
+
+  if (strengthMap.size > 0) {
+    sections.push('### Known Strengths (reinforce these)');
+    const sorted = [...strengthMap.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [strength, count] of sorted.slice(0, 8)) {
+      sections.push(`- ${strength}${count > 1 ? ` (observed ${count}x)` : ''}`);
+    }
+    sections.push('');
+  }
+
+  if (weaknessMap.size > 0) {
+    sections.push('### Known Weaknesses (prioritize addressing these)');
+    const sorted = [...weaknessMap.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [weakness, count] of sorted.slice(0, 8)) {
+      sections.push(`- ${weakness}${count > 1 ? ` (observed ${count}x)` : ''}`);
+    }
+    sections.push('');
+  }
+
+  if (lessonMap.size > 0) {
+    sections.push('### Lessons Learned');
+    const sorted = [...lessonMap.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [lesson, count] of sorted.slice(0, 5)) {
+      sections.push(`- ${lesson}${count > 1 ? ` (confirmed ${count}x)` : ''}`);
+    }
+    sections.push('');
+  }
+
+  sections.push(`*Based on ${feedback.length} previous pipeline run(s).*`);
+  return sections.join('\n');
 }

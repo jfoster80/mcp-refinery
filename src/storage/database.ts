@@ -12,6 +12,7 @@ import type {
   ArchitectureDecisionRecord, PolicyRule, ScorecardSnapshot,
   DeliveryPlan, PullRequestRecord, TestRunRecord,
   ReleaseRecord, GovernanceApproval, ConsensusResult,
+  FeedbackEntry,
 } from '../types/index.js';
 
 type Rec = Record<string, unknown>;
@@ -29,6 +30,7 @@ let stores: {
   tests: JsonStore<TestRunRecord & Rec>;
   releases: JsonStore<ReleaseRecord & Rec>;
   approvals: JsonStore<GovernanceApproval & Rec>;
+  feedback: JsonStore<FeedbackEntry & Rec>;
 } | null = null;
 
 export function initDatabase(): void {
@@ -47,6 +49,7 @@ export function initDatabase(): void {
     tests: new JsonStore(base, 'test-runs', 'run_id'),
     releases: new JsonStore(base, 'releases', 'release_id'),
     approvals: new JsonStore(base, 'approvals', 'approval_id'),
+    feedback: new JsonStore(base, 'feedback', 'feedback_id'),
   };
 }
 
@@ -173,4 +176,20 @@ export function insertGovernanceApproval(a: GovernanceApproval): void { db().app
 
 export function hasApproval(targetType: string, targetId: string): boolean {
   return db().approvals.count((a) => a.target_type === targetType && a.target_id === targetId) > 0;
+}
+
+// -- Feedback (Continuous Improvement) --------------------------------------
+
+export function insertFeedback(f: FeedbackEntry): void { db().feedback.insert(f as FeedbackEntry & Rec); }
+
+export function getFeedback(serverId: string, limit = 20): FeedbackEntry[] {
+  return db().feedback.list((f) => f.target_server_id === serverId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, limit) as FeedbackEntry[];
+}
+
+export function getAllFeedback(limit = 50): FeedbackEntry[] {
+  return db().feedback.list()
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, limit) as FeedbackEntry[];
 }

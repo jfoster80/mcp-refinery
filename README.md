@@ -155,16 +155,27 @@ Use the pipeline_status tool
 
 ## Pipeline
 
-Every pipeline passes through overlays in order. Two overlays are **mandatory gates**:
+Every pipeline passes through overlays in order. Three aspects are **mandatory**:
 
-```
-research → classify → [deliberate] → triage → ALIGN → plan → execute → CLEANUP → DOCUMENT → release → propagate
-                                                 ▲                          ▲          ▲
-                                          user must approve    post-change    docs ship
-                                                               verification   with code
+```mermaid
+flowchart LR
+  R[Research] --> C[Classify] --> T[Triage]
+  T --> A{{"⚡ ALIGN<br/>User approves"}}
+  A --> P[Plan] --> E[Execute]
+  E --> CL["🧹 CLEANUP<br/>+ doc freshness"]
+  CL --> D["📄 DOCUMENT"]
+  D --> REL[Release] --> PR[Propagate]
+  PR --> FB["📈 FEEDBACK<br/>lessons learned"]
+
+  style A fill:#ff9,stroke:#333,stroke-width:2px
+  style CL fill:#e8f5e9,stroke:#2e7d32
+  style FB fill:#e3f2fd,stroke:#1565c0
 ```
 
-The **align** gate always pauses for user confirmation before changing anything. The **cleanup** pass always runs after execution to catch stale imports, dead exports, orphaned files, and misaligned references. The **document** pass ensures documentation ships with code — no release proceeds with stale docs.
+- The **align** gate always pauses for user confirmation before changing anything
+- The **cleanup** pass catches stale imports, dead exports, orphaned files, outdated docs, and misaligned diagrams
+- The **document** pass ensures documentation ships with code — no release with stale docs
+- The **feedback** step records strengths, weaknesses, and lessons learned for the next cycle
 
 ## Model Routing
 
@@ -181,31 +192,43 @@ Keys are checked live on every call — adding a key takes effect immediately.
 
 For critical decisions, two architect-tier models review the same problem (multi-model deliberation). When they disagree, the conflict goes to the user.
 
-## MCP Tools (36)
+## MCP Tools (39)
 
 ### Facade (start here)
 
 | Tool | Purpose |
 |------|---------|
-| `ingest` | Feed in a research article |
-| `refine` | Full improvement pipeline |
-| `consult` | Specialist consultation / deliberation |
-| `pipeline_next` | Advance active pipeline |
-| `pipeline_status` | Check pipeline state |
+| `ingest` | Feed in a research article — extracts findings, computes consensus, produces proposals |
+| `refine` | Full improvement pipeline — research through release with alignment gates |
+| `consult` | Specialist consultation with multi-model deliberation for critical decisions |
+| `pipeline_next` | Advance active pipeline to next overlay step |
+| `pipeline_status` | Check pipeline state — current overlay, progress, what's needed next |
+| `pipeline_cancel` | Cancel a stuck or unwanted pipeline |
+| `pipeline_purge` | Purge all orphaned pipelines from prior sessions |
 
 ### ResearchOps (governed research lifecycle)
 
 | Tool | Purpose |
 |------|---------|
-| `research_new` | Create a new Research Case with full scaffolding |
-| `research_advance` | Advance a case through the overlay pipeline |
-| `research_status` | Check case status or list all cases |
-| `research_consult` | Query a case for decisions, evidence, or artifacts |
-| `research_validate` | Run deterministic validation checks on a case |
+| `research_new` | Create a new Research Case with full scaffolding and pipeline |
+| `research_advance` | Advance a case through intake → synthesize → review → decide → freeze → implement → evaluate → release |
+| `research_status` | Check case status or list all cases with progress indicators |
+| `research_consult` | Query a case for decisions, evidence, or artifact content |
+| `research_validate` | Run deterministic validation checks (structure, PHI, reviews, freeze, budget) |
+
+### Continuous Improvement (feedback loop)
+
+| Tool | Purpose |
+|------|---------|
+| `feedback_query` | Query strengths, weaknesses, and lessons learned from past pipeline runs |
+
+Feedback is recorded automatically when pipelines complete. The research overlay consults past feedback to inject "institutional memory" into research prompts.
 
 ### Internal (advanced)
 
-**Research**: `server_register`, `server_list`, `research_start`, `research_store`, `research_consensus`, `research_query`
+**Server**: `server_register`, `server_list`
+
+**Research**: `research_start`, `research_store`, `research_consensus`, `research_query`
 
 **Decision**: `improvements_triage`, `decision_record_adr`, `decision_check_oscillation`, `decision_capture_scorecard`
 

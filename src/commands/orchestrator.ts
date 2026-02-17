@@ -21,10 +21,11 @@ import {
 import {
   upsertTargetServer, getTargetServer, listTargetServers, getResearchFeeds,
   getLatestConsensus, insertConsensusResult, listProposals,
-  recordAudit,
+  recordAudit, insertFeedback, getFeedback,
 } from '../storage/index.js';
+import type { FeedbackEntry } from '../types/index.js';
 import { triageFindings } from '../decision/index.js';
-import { buildCleanupChecklist, buildDocumentationGuide, buildImplementationGuide, matchFindingsToBaselines } from '../knowledge/index.js';
+import { buildCleanupChecklist, buildDocumentationGuide, buildImplementationGuide, matchFindingsToBaselines, buildFeedbackPromptSection } from '../knowledge/index.js';
 import { createCase as createResearchCase } from '../research-ops/index.js';
 import type { ResearchPerspective } from '../types/index.js';
 import type { TaskClassification } from '../types/index.js';
@@ -159,17 +160,31 @@ function normalizeSelfTarget(input: {
   // Auto-inject the refinery's own tool names as context
   if (!input.current_tools || input.current_tools.length === 0) {
     input.current_tools = [
+      // Facade tools (primary interface)
       'refine', 'consult', 'ingest', 'pipeline_next', 'pipeline_status',
+      'pipeline_cancel', 'pipeline_purge',
+      // Server management
       'server_register', 'server_list',
+      // Research plane
       'research_start', 'research_store', 'research_consensus', 'research_query',
+      // Decision plane
       'improvements_triage', 'decision_record_adr', 'decision_check_oscillation', 'decision_capture_scorecard',
+      // Delivery plane
       'delivery_plan', 'delivery_create_pr', 'delivery_release',
+      // Governance
       'governance_approve', 'governance_check',
+      // Audit & search
       'audit_query', 'audit_stats', 'search_similar',
+      // Model routing
       'model_list', 'model_classify',
+      // Multi-model deliberation
       'deliberation_start', 'deliberation_submit', 'deliberation_resolve', 'deliberation_status',
+      // Knowledge & cleanup
       'baselines', 'cleanup_checklist',
+      // ResearchOps (governed research lifecycle)
       'research_new', 'research_advance', 'research_status', 'research_consult', 'research_validate',
+      // Continuous improvement (feedback loop)
+      'feedback_query',
     ];
   }
 
@@ -579,6 +594,13 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
       ? ['security', 'compliance']
       : ['security', 'reliability', 'compliance', 'devex', 'performance'];
 
+    // Inject feedback from past pipelines into the research context
+    const pastFeedback = getFeedback(serverId, 10);
+    const feedbackSection = buildFeedbackPromptSection(pastFeedback);
+    const enrichedContext = feedbackSection
+      ? `${(pipeline.data.context as string) ?? ''}\n\n${feedbackSection}`
+      : (pipeline.data.context as string) ?? '';
+
     const result = startResearch({
       target_server_id: serverId,
       server_name: (pipeline.data.server_name as string) ?? serverId,
@@ -588,7 +610,7 @@ function executeResearchOverlay(pipeline: PipelineState, input?: Record<string, 
       transport: 'stdio',
       auth_mode: 'none',
       focus_areas: perspectives,
-      additional_context: (pipeline.data.context as string) ?? '',
+      additional_context: enrichedContext,
     }, perspectives);
 
     pipeline.data.research_prompts = result.prompts as unknown as Record<string, unknown>;
@@ -1016,11 +1038,105 @@ function executePropagateOverlay(pipeline: PipelineState): StepResult {
 }
 
 function completedResult(pipeline: PipelineState): StepResult {
+  // Record feedback for the continuous improvement loop
+  collectPipelineFeedback(pipeline);
+
   return stepResult(pipeline, 'Pipeline Complete', `All ${pipeline.overlays.length} overlays finished.`, 'completed', {
     control: 'user',
-    description: 'Pipeline complete. Start a new cycle when ready.',
-    bootstrap_prompt: `Pipeline ${pipeline.pipeline_id} complete.\nCommand: ${pipeline.command} | Overlays: ${pipeline.overlays.join(' → ')}\n\nTo start a new cycle: use refine again.`,
+    description: 'Pipeline complete. Feedback recorded for continuous improvement. Start a new cycle when ready.',
+    bootstrap_prompt: `Pipeline ${pipeline.pipeline_id} complete.\nCommand: ${pipeline.command} | Overlays: ${pipeline.overlays.join(' → ')}\n\nFeedback has been recorded for the continuous improvement loop. Future pipelines will consult this feedback during research.\n\nTo start a new cycle: use refine again.`,
   });
+}
+
+/**
+ * Collect feedback from a completed pipeline and store it for the
+ * continuous improvement loop. Analyzes pipeline data to extract
+ * strengths, weaknesses, and lessons learned.
+ */
+function collectPipelineFeedback(pipeline: PipelineState): void {
+  const strengths: string[] = [];
+  const weaknesses: string[] = [];
+  const lessons: string[] = [];
+
+  // Analyze research phase
+  const perspDone = (pipeline.data.perspectives_done as number) ?? 0;
+  const perspTotal = (pipeline.data.perspectives_total as number) ?? 0;
+  if (perspDone === perspTotal && perspTotal > 0) {
+    strengths.push(`Research completed across all ${perspTotal} perspectives`);
+  } else if (perspTotal > 0 && perspDone < perspTotal) {
+    weaknesses.push(`Research incomplete: ${perspDone}/${perspTotal} perspectives analyzed`);
+    lessons.push('Consider using force_advance sparingly — skipped perspectives leave gaps');
+  }
+
+  // Analyze consensus
+  const agreement = pipeline.data.agreement as number | undefined;
+  if (agreement !== undefined) {
+    if (agreement >= 0.7) {
+      strengths.push(`High cross-perspective agreement (${(agreement * 100).toFixed(0)}%)`);
+    } else if (agreement < 0.4) {
+      weaknesses.push(`Low cross-perspective agreement (${(agreement * 100).toFixed(0)}%) — findings may be noisy`);
+      lessons.push('Low agreement suggests research prompts need more focus or context');
+    }
+  }
+
+  // Analyze proposals
+  const proposalCount = (pipeline.data.actionable_count as number) ?? 0;
+  if (proposalCount > 0) {
+    strengths.push(`${proposalCount} actionable proposal(s) generated from research`);
+  } else {
+    weaknesses.push('No actionable proposals — research may have been too generic');
+  }
+
+  // Analyze cleanup
+  if (pipeline.data.cleanup_completed) {
+    strengths.push('Cleanup verification pass completed');
+  }
+
+  // Analyze documentation
+  if (pipeline.data.documentation_completed) {
+    strengths.push('Documentation updated alongside code changes');
+  }
+
+  // Analyze if research ops case was created
+  if (pipeline.data.research_ops_case_id) {
+    strengths.push('Research findings persisted to durable ResearchOps case');
+  }
+
+  // Analyze sync from individual tools
+  if (pipeline.data.synced_from_individual_tools) {
+    lessons.push('Pipeline auto-synced with individual tool calls — the hybrid workflow works');
+  }
+
+  // Always record feedback, even if minimal
+  if (strengths.length === 0) {
+    strengths.push('Pipeline completed successfully');
+  }
+
+  const entry: FeedbackEntry = {
+    feedback_id: `fb-${pipeline.pipeline_id.slice(0, 8)}`,
+    pipeline_id: pipeline.pipeline_id,
+    target_server_id: pipeline.target_server_id,
+    command: pipeline.command,
+    strengths,
+    weaknesses,
+    lessons_learned: lessons,
+    overlays_completed: pipeline.overlays.slice(0, pipeline.overlay_index + 1),
+    duration_estimate_hours: 0,
+    proposals_acted_on: proposalCount,
+    created_at: new Date().toISOString(),
+  };
+
+  try {
+    insertFeedback(entry);
+    recordAudit('pipeline.feedback', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+      feedback_id: entry.feedback_id,
+      strengths_count: strengths.length,
+      weaknesses_count: weaknesses.length,
+      lessons_count: lessons.length,
+    });
+  } catch {
+    // Non-fatal: pipeline completion should not fail due to feedback storage
+  }
 }
 
 // ---------------------------------------------------------------------------

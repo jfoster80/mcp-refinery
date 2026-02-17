@@ -25,6 +25,7 @@ import {
   upsertTargetServer, listTargetServers,
   getResearchFeeds, getLatestConsensus, getProposal, listProposals,
   insertConsensusResult, queryAuditLog, getAuditStats, getVectorStats, findSimilarDecisions,
+  getFeedback, getAllFeedback,
 } from '../storage/index.js';
 import type { TargetServerConfig } from '../types/index.js';
 import {
@@ -1116,6 +1117,76 @@ Return findings as JSON matching: ${FINDINGS_JSON_SHAPE}`,
           control: 'agent',
           description: 'Run the checklist against recently modified files.',
           bootstrap_prompt: checklist,
+        },
+      });
+    },
+  );
+
+  // =========================================================================
+  // CONTINUOUS IMPROVEMENT — Feedback loop
+  // =========================================================================
+
+  server.tool(
+    'feedback_query',
+    'Query the continuous improvement feedback log. Returns strengths, weaknesses, and lessons learned from past pipeline runs. Use this to understand what worked and what needs improvement. Feed results into research prompts for informed analysis.',
+    {
+      target_server_id: z.string().optional().describe('Filter feedback by server. Omit to see feedback across all servers.'),
+      limit: z.number().optional().describe('Maximum entries to return (default: 20)'),
+    },
+    async (args) => {
+      const entries = args.target_server_id
+        ? getFeedback(args.target_server_id, args.limit ?? 20)
+        : getAllFeedback(args.limit ?? 20);
+
+      if (entries.length === 0) {
+        return output({
+          status: 'success',
+          data: { count: 0, entries: [] },
+          message: 'No feedback recorded yet. Feedback is captured automatically when pipelines complete.',
+          next: {
+            control: 'user',
+            description: 'Run a pipeline to generate feedback.',
+            bootstrap_prompt: 'No feedback entries found. Feedback is recorded automatically when pipelines complete. Use refine to start an improvement cycle — when it completes, strengths, weaknesses, and lessons learned will be captured and available here.',
+          },
+        });
+      }
+
+      // Aggregate themes across entries
+      const strengthCounts = new Map<string, number>();
+      const weaknessCounts = new Map<string, number>();
+      for (const e of entries) {
+        for (const s of e.strengths) strengthCounts.set(s, (strengthCounts.get(s) ?? 0) + 1);
+        for (const w of e.weaknesses) weaknessCounts.set(w, (weaknessCounts.get(w) ?? 0) + 1);
+      }
+
+      const topStrengths = [...strengthCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+      const topWeaknesses = [...weaknessCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+      return output({
+        status: 'success',
+        data: {
+          count: entries.length,
+          summary: {
+            top_strengths: topStrengths.map(([s, c]) => ({ strength: s, occurrences: c })),
+            top_weaknesses: topWeaknesses.map(([w, c]) => ({ weakness: w, occurrences: c })),
+          },
+          entries: entries.slice(0, 10).map((e) => ({
+            feedback_id: e.feedback_id,
+            pipeline_id: e.pipeline_id,
+            target: e.target_server_id,
+            command: e.command,
+            strengths: e.strengths,
+            weaknesses: e.weaknesses,
+            lessons_learned: e.lessons_learned,
+            proposals_acted_on: e.proposals_acted_on,
+            created_at: e.created_at,
+          })),
+        },
+        message: `${entries.length} feedback entry/entries. Top strength: "${topStrengths[0]?.[0] ?? 'none'}". Top weakness: "${topWeaknesses[0]?.[0] ?? 'none'}".`,
+        next: {
+          control: 'user',
+          description: 'Review feedback themes. Use these insights to guide your next improvement cycle.',
+          bootstrap_prompt: `${entries.length} feedback entries analyzed.\n\n**Recurring strengths** (reinforce these):\n${topStrengths.map(([s, c]) => `- ${s} (${c}x)`).join('\n') || '- none yet'}\n\n**Recurring weaknesses** (address these):\n${topWeaknesses.map(([w, c]) => `- ${w} (${c}x)`).join('\n') || '- none yet'}\n\nTo use this feedback in a new pipeline:\nUse refine with target_server_id — the research overlay automatically consults past feedback.\n\nTo drill into a specific entry: review the entries data above.`,
         },
       });
     },

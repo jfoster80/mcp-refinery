@@ -7,5 +7,6 @@ export {
   buildBaselinePromptSection, buildCompliancePromptSection,
   buildCleanupChecklist, buildCleanupGuide,
   buildDocumentationGuide, buildImplementationGuide, matchFindingsToBaselines,
+  buildFeedbackPromptSection,
 } from './baselines.js';
 export type { BaselinePattern, BaselineCategory } from './baselines.js';

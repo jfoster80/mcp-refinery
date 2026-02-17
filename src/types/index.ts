@@ -40,6 +40,7 @@ export type AuditAction =
   | 'delivery.released' | 'delivery.rolled_back'
   | 'governance.approval' | 'governance.escalation' | 'policy.violation'
   | 'pipeline.start' | 'pipeline.advance' | 'pipeline.sync' | 'pipeline.cancel' | 'pipeline.cleanup' | 'pipeline.documentation'
+  | 'pipeline.feedback'
   | 'deliberation.start' | 'deliberation.resolve'
   | 'research_ops.case_created' | 'research_ops.case_advanced'
   | 'research_ops.proposal_frozen' | 'research_ops.case_completed'
@@ -388,6 +389,24 @@ export interface TaskClassification {
   recommended_tier: ModelTier;
   recommended_models: string[];
   reasoning: string;
+}
+
+// ---------------------------------------------------------------------------
+// Continuous Improvement — Feedback Loop
+// ---------------------------------------------------------------------------
+
+export interface FeedbackEntry {
+  feedback_id: string;
+  pipeline_id: string;
+  target_server_id: string;
+  command: string;
+  strengths: string[];
+  weaknesses: string[];
+  lessons_learned: string[];
+  overlays_completed: string[];
+  duration_estimate_hours: number;
+  proposals_acted_on: number;
+  created_at: string;
 }
 
 export interface DeliberationSession {

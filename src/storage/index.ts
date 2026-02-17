@@ -14,6 +14,7 @@ export {
   insertPullRequest, insertTestRun,
   insertRelease, getRelease, updateReleaseStatus, getLatestRelease,
   insertGovernanceApproval, hasApproval,
+  insertFeedback, getFeedback, getAllFeedback,
 } from './database.js';
 
 export { storeArtifact } from './artifacts.js';

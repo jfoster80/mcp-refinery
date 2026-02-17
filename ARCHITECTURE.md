@@ -52,50 +52,52 @@ produce code changes as one of its outputs.
 
 ## 2. Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          MCP Refinery Server                           │
-│                    (STDIO transport, single CJS bundle)                 │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌───────────┐   ┌──────────────┐   ┌──────────────┐   ┌────────────┐ │
-│  │ Knowledge  │──>│   Research    │──>│   Decision    │──>│  Delivery  │ │
-│  │  Baselines │   │    Plane     │   │    Plane      │   │   Plane    │ │
-│  │            │   │              │   │               │   │            │ │
-│  │ 21 proven  │   │ Perspectives │   │ Policy engine │   │ Plans, PRs │ │
-│  │ patterns   │   │ Consensus    │   │ ADRs          │   │ Releases   │ │
-│  │ from our   │   │ Findings     │   │ Scorecards    │   │ SemVer     │ │
-│  │ own arch   │   │              │   │ Triage        │   │            │ │
-│  └───────────┘   └──────────────┘   └──────────────┘   └────────────┘ │
-│         │                │                  │                  │        │
-│         │          ┌─────┴──────────────────┴──────────────────┘        │
-│         │          │                                                    │
-│         │    ┌─────┴─────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│         │    │   Audit    │  │   Vector    │  │   Pipeline          │  │
-│         │    │   Trail    │  │   Store     │  │   Orchestrator      │  │
-│         │    │ (JSONL)    │  │ (cosine)    │  │                     │  │
-│         │    └───────────┘  └─────────────┘  │  Intent → Command   │  │
-│         │                                     │  Command → Overlays │  │
-│         └────────────────── Propagate ────────│  Agent selection    │  │
-│                             (cross-server)    │  Model routing      │  │
-│                                               │  Bootstrap prompts  │  │
-│  ┌──────────────┐  ┌──────────────────────┐  └─────────────────────┘  │
-│  │  7 Specialist │  │  Model Router         │                          │
-│  │  Agents       │  │                       │                          │
-│  │               │  │  Live key detection   │                          │
-│  │  Researcher   │  │  Tier classification  │                          │
-│  │  Architect    │  │  Multi-model delib.   │                          │
-│  │  Security     │  │                       │                          │
-│  │  Code Smith   │  │  anthropic  ✓ key     │                          │
-│  │  Tester       │  │  openai     ○ no key  │                          │
-│  │  Governance   │  │  google     ○ no key  │                          │
-│  │  Release Mgr  │  │  xai        ○ no key  │                          │
-│  └──────────────┘  └──────────────────────┘                           │
-│                                                                         │
-├─────────────────────────────────────────────────────────────────────────┤
-│  Facade Tools: ingest | refine | consult | pipeline_next | pipeline_status │
-│  + 5 ResearchOps tools + 26 internal tools                                │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+  subgraph Server["MCP Refinery Server (STDIO, single CJS bundle)"]
+
+    subgraph Planes["Processing Planes"]
+      K["Knowledge<br/>21 proven patterns<br/>from own architecture"]
+      R["Research Plane<br/>Perspectives · Consensus · Findings"]
+      D["Decision Plane<br/>Policy engine · ADRs<br/>Scorecards · Triage"]
+      DL["Delivery Plane<br/>Plans · PRs<br/>Releases · SemVer"]
+      K --> R --> D --> DL
+    end
+
+    subgraph Infra["Infrastructure"]
+      Audit["Audit Trail<br/>(JSONL, hash-chained)"]
+      Vec["Vector Store<br/>(cosine similarity)"]
+      FB["Feedback Store<br/>(continuous improvement)"]
+    end
+
+    subgraph Orch["Pipeline Orchestrator"]
+      O1["Intent → Command"]
+      O2["Command → Overlays"]
+      O3["Agent selection"]
+      O4["Model routing"]
+      O5["Bootstrap prompts"]
+    end
+
+    subgraph Agents["7 Specialist Agents"]
+      A1["Researcher · Architect · Security"]
+      A2["Code Smith · Tester"]
+      A3["Governance · Release Mgr"]
+    end
+
+    subgraph Models["Model Router"]
+      M1["Live key detection"]
+      M2["Tier classification"]
+      M3["Multi-model deliberation"]
+    end
+
+    DL --> Audit
+    DL --> Vec
+    K -.->|Propagate<br/>cross-server| K
+  end
+
+  subgraph Tools["Facade: ingest · refine · consult · pipeline_next · pipeline_status"]
+  end
+  Tools --> Planes
 ```
 
 ### Four layers
@@ -127,88 +129,50 @@ self-contained stage that either auto-advances or pauses for input.
 
 ### The `refine` pipeline (full sequence)
 
-```
- User: "refine my-server"
-          │
-          ▼
- ┌─── RESEARCH ───┐     Agent analyzes from 5 perspectives:
- │  security       │     security, reliability, compliance,
- │  reliability    │     devex, performance
- │  compliance     │     ↓
- │  devex          │     Findings enriched with baseline patterns
- │  performance    │     ↓
- └───────┬─────────┘     Consensus computed across perspectives
-          │
-          ▼
- ┌─── CLASSIFY ───┐     Complexity: trivial → simple → moderate → complex → critical
- │  task scoring   │     Risk: low → medium → high → critical
- │  tier selection │     Model tier: fast / workhorse / architect
- │  multi-model?   │     If complex+critical → inject DELIBERATE overlay
- └───────┬─────────┘
-          │
-          ▼ (auto-injected when classification warrants it)
- ┌── DELIBERATE ──┐     Two architect-tier models review the same problem
- │  iron sharpens  │     Agreement analysis: common ground, unique insights
- │  iron           │     Conflicts escalated to user
- └───────┬─────────┘
-          │
-          ▼
- ┌──── TRIAGE ────┐     Proposals ranked by impact × confidence
- │  priority score │     Anti-oscillation check per proposal
- │  risk filter    │     Change budget enforcement
- │  escalations    │     Blocked proposals reported
- └───────┬─────────┘
-          │
-          ▼
- ╔════ ALIGN ═════╗     *** USER APPROVAL REQUIRED ***
- ║                 ║     Presents: proposals, baseline matches,
- ║  "Do you want   ║     what happens next
- ║   to proceed?"  ║     Nothing moves forward without explicit approval
- ║                 ║
- ╚═══════╤═════════╝
-          │ (user approves)
-          ▼
- ┌──── PLAN ──────┐     Delivery plan with acceptance criteria,
- │  acceptance     │     test strategy, rollback plan
- │  criteria       │
- │  rollback plan  │
- └───────┬─────────┘
-          │
-          ▼
- ┌─── EXECUTE ────┐     PR creation, implementation,
- │  PR creation    │     test execution
- │  testing        │
- └───────┬─────────┘
-          │
-          ▼
- ┌─── CLEANUP ────┐     Post-change verification:
- │  stale imports? │     unused imports, dead exports,
- │  dead exports?  │     orphaned types, orphaned files,
- │  orphaned types?│     stale comments, misaligned refs,
- │  orphaned files?│     stale build artifacts
- └───────┬─────────┘
-          │
-          ▼
- ┌── DOCUMENT ────┐     README tool inventory sync,
- │  README sync    │     architecture doc accuracy,
- │  architecture   │     config reference completeness,
- │  CHANGELOG      │     CHANGELOG entry, example validity
- └───────┬─────────┘
-          │
-          ▼
- ┌─── RELEASE ────┐     SemVer bump (major/minor/patch)
- │  changelog      │     Changelog from proposals
- │  version bump   │     *** USER APPROVAL for publish ***
- └───────┬─────────┘
-          │
-          ▼
- ┌── PROPAGATE ───┐     Universal findings (high agreement,
- │  cross-server   │     multi-perspective, non-trivial risk)
- │  improvements   │     flagged for other managed servers
- └───────┬─────────┘
-          │
-          ▼
-      COMPLETE
+```mermaid
+flowchart TD
+  START(["User: 'refine my-server'"]) --> RESEARCH
+
+  RESEARCH["🔬 RESEARCH<br/>5 perspectives: security, reliability,<br/>compliance, devex, performance<br/>↓ Findings enriched with baselines<br/>↓ Consensus computed"]
+  RESEARCH --> CLASSIFY
+
+  CLASSIFY["📊 CLASSIFY<br/>Complexity: trivial → critical<br/>Risk: low → critical<br/>Model tier: fast / workhorse / architect"]
+  CLASSIFY --> DELIBERATE
+
+  DELIBERATE["🤝 DELIBERATE<br/><i>(auto-injected when critical)</i><br/>Two architect-tier models<br/>Agreement analysis<br/>Conflicts → user"]
+  DELIBERATE --> TRIAGE
+
+  TRIAGE["📋 TRIAGE<br/>Proposals ranked by impact × confidence<br/>Anti-oscillation check<br/>Change budget enforcement"]
+  TRIAGE --> ALIGN
+
+  ALIGN{{"⚡ ALIGN<br/>USER APPROVAL REQUIRED<br/>Proposals · Baseline matches<br/>'Do you want to proceed?'"}}
+  ALIGN -->|"User approves"| PLAN
+  ALIGN -->|"User redirects"| RESEARCH
+
+  PLAN["📝 PLAN<br/>Acceptance criteria<br/>Test strategy · Rollback plan"]
+  PLAN --> EXECUTE
+
+  EXECUTE["🔨 EXECUTE<br/>PR creation<br/>Implementation · Testing"]
+  EXECUTE --> CLEANUP
+
+  CLEANUP["🧹 CLEANUP<br/>Stale imports · Dead exports<br/>Orphaned types · Doc freshness<br/>Diagram accuracy · Feedback loop"]
+  CLEANUP --> DOCUMENT
+
+  DOCUMENT["📄 DOCUMENT<br/>README sync · Architecture docs<br/>Mermaid diagrams · CHANGELOG<br/>Config reference"]
+  DOCUMENT --> RELEASE
+
+  RELEASE["🚀 RELEASE<br/>SemVer bump<br/>Changelog from proposals"]
+  RELEASE --> PROPAGATE
+
+  PROPAGATE["🌐 PROPAGATE<br/>Universal findings → other servers<br/>High agreement, multi-perspective"]
+  PROPAGATE --> FEEDBACK
+
+  FEEDBACK["📈 FEEDBACK<br/>Log strengths · weaknesses<br/>Lessons learned → next cycle"]
+  FEEDBACK --> COMPLETE(["✅ COMPLETE"])
+
+  style ALIGN fill:#ff9,stroke:#333,stroke-width:3px
+  style CLEANUP fill:#e8f5e9,stroke:#2e7d32
+  style FEEDBACK fill:#e3f2fd,stroke:#1565c0
 ```
 
 ### Command variants
@@ -235,20 +199,18 @@ auto-injects the refinery's own source path, tool names, and context. The
 pipeline is otherwise identical — same overlays, same alignment gates, same
 cleanup passes.
 
-```
-User (from ANY workspace):
-  "Have m-r improve itself based on this research"
-          │
-          ▼
-  normalizeSelfTarget()
-    ├── Canonicalize target to "self"
-    ├── Auto-inject source_path from config
-    ├── Auto-inject 36 tool names
-    └── Add self-improvement context note
-          │
-          ▼
-  Same pipeline as any other target:
-  research → classify → triage → ALIGN → plan → execute → CLEANUP → DOCUMENT → release → propagate
+```mermaid
+flowchart LR
+  User["User (ANY workspace):<br/>'Have m-r improve itself'"] --> Norm["normalizeSelfTarget()"]
+  Norm --> C1["Canonicalize → 'self'"]
+  Norm --> C2["Auto-inject source_path"]
+  Norm --> C3["Auto-inject 39 tool names"]
+  Norm --> C4["Add self-improvement context"]
+  C1 --> Pipeline["Same pipeline as any target"]
+  C2 --> Pipeline
+  C3 --> Pipeline
+  C4 --> Pipeline
+  Pipeline --> Flow["research → classify → triage → ALIGN →<br/>plan → execute → CLEANUP → DOCUMENT →<br/>release → propagate"]
 ```
 
 The only difference between self-improvement and improving another server is
@@ -280,53 +242,28 @@ detects the new key and starts routing to that provider.
 
 ### Model tiers
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    ARCHITECT TIER                         │
-│  For: architecture decisions, security audits, complex    │
-│       tradeoffs, multi-model deliberation                │
-│                                                           │
-│  Claude Opus (quality: 10)  ←── current primary           │
-│  o3          (quality: 10)  ←── available when key added  │
-│  GPT-4o      (quality: 9)   ←── available when key added  │
-│  Gemini Pro  (quality: 9)   ←── available when key added  │
-├─────────────────────────────────────────────────────────┤
-│                    WORKHORSE TIER                         │
-│  For: code generation, code review, standard analysis     │
-│                                                           │
-│  Claude Sonnet (quality: 8)  ←── current primary          │
-│  Gemini Flash  (quality: 7)                               │
-│  Grok 3        (quality: 7)                               │
-├─────────────────────────────────────────────────────────┤
-│                      FAST TIER                            │
-│  For: simple tasks, documentation, governance checks      │
-│                                                           │
-│  Claude Haiku   (quality: 6)  ←── current primary         │
-│  GPT-4o Mini    (quality: 6)                              │
-└─────────────────────────────────────────────────────────┘
-```
+| Tier | Purpose | Models | Quality |
+|------|---------|--------|---------|
+| **Architect** | Architecture decisions, security audits, complex tradeoffs, multi-model deliberation | Claude Opus (primary), o3, GPT-4o, Gemini Pro | 9-10 |
+| **Workhorse** | Code generation, code review, standard analysis | Claude Sonnet (primary), Gemini Flash, Grok 3 | 7-8 |
+| **Fast** | Simple tasks, documentation, governance checks | Claude Haiku (primary), GPT-4o Mini | 6 |
 
 ### Multi-model deliberation
 
 When the classifier flags a task as critical or the user requests it,
 two architect-tier models review the same problem independently.
 
-```
-  Problem Statement
-         │
-    ┌────┴────┐
-    ▼         ▼
- Model A   Model B        (prefer different providers when keys available)
-    │         │
-    ▼         ▼
- Response A  Response B
-    │         │
-    └────┬────┘
-         ▼
-  Agreement Analysis
-    ├── Agreed points      →  proceed with confidence
-    ├── Unique insights    →  merge into recommendation
-    └── Conflicts          →  escalate to user
+```mermaid
+flowchart TD
+  P["Problem Statement"] --> A["Model A<br/>(prefer different providers)"]
+  P --> B["Model B"]
+  A --> RA["Response A"]
+  B --> RB["Response B"]
+  RA --> AA["Agreement Analysis"]
+  RB --> AA
+  AA --> Agree["✅ Agreed points<br/>Proceed with confidence"]
+  AA --> Unique["💡 Unique insights<br/>Merge into recommendation"]
+  AA --> Conflict["⚠️ Conflicts<br/>Escalate to user"]
 ```
 
 ---
@@ -410,6 +347,46 @@ These are injected into research prompts so the agent knows what to look for.
 - **Change budgets** — A maximum number of changes per time window prevents
   runaway automation.
 
+### Continuous improvement feedback loop
+
+Every completed pipeline automatically records feedback — strengths, weaknesses,
+and lessons learned — into a durable feedback store. This creates a true learning loop:
+
+```mermaid
+flowchart TD
+  DONE["Pipeline completes"] --> COLLECT["collectPipelineFeedback()"]
+
+  COLLECT --> A1["Analyze research quality<br/>(perspectives, agreement)"]
+  COLLECT --> A2["Analyze proposal yield<br/>(actionable count)"]
+  COLLECT --> A3["Analyze cleanup/docs completion"]
+  A1 --> STORE["Store as FeedbackEntry"]
+  A2 --> STORE
+  A3 --> STORE
+
+  STORE --> NEXT["Next pipeline starts"]
+
+  NEXT --> BUILD["buildFeedbackPromptSection()"]
+  BUILD --> Q1["Query past feedback for server"]
+  BUILD --> Q2["Aggregate recurring themes"]
+  BUILD --> Q3["Inject as 'Institutional Memory'"]
+  Q1 --> RESEARCH["Research informed by experience"]
+  Q2 --> RESEARCH
+  Q3 --> RESEARCH
+
+  RESEARCH --> R1["✅ Reinforce known strengths"]
+  RESEARCH --> R2["🎯 Prioritize known weaknesses"]
+
+  R1 -.->|"cycle repeats"| DONE
+  R2 -.->|"cycle repeats"| DONE
+
+  style STORE fill:#e3f2fd,stroke:#1565c0
+  style RESEARCH fill:#e8f5e9,stroke:#2e7d32
+```
+
+The feedback loop ensures that each improvement cycle builds on what was learned
+before. Weaknesses become research priorities. Strengths are reinforced. The system
+gets smarter with every cycle.
+
 ---
 
 ## 8. Bootstrap Prompt System
@@ -457,6 +434,7 @@ data/
   approvals/        Governance approvals (GovernanceApproval)
   pipelines/        Active/completed pipeline state (PipelineState)
   deliberations/    Multi-model deliberation sessions (DeliberationSession)
+  feedback/         Continuous improvement feedback entries (FeedbackEntry)
   vectors/          Similarity search index
   artifacts/        Immutable content-addressed blobs
   audit/            Append-only hash-chained JSONL audit log
@@ -617,7 +595,7 @@ src/
     validation.ts         Deterministic case validation (non-LLM)
     index.ts              ResearchOps facade
 
-  tools/index.ts          All 36 MCP tool registrations
+  tools/index.ts          All 39 MCP tool registrations
   resources/index.ts      MCP resource registrations
   prompts/index.ts        MCP prompt registrations
 
