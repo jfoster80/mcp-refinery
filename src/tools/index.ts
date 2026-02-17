@@ -34,7 +34,7 @@ import {
 } from '../routing/index.js';
 import {
   startPipeline, advancePipeline, getPipeline, getActivePipeline,
-  getOverlayRequirements,
+  getOverlayRequirements, cancelPipeline, purgeStuckPipelines,
 } from '../commands/index.js';
 import { getAllAgents } from '../agents/index.js';
 import { getAllPatterns, getCriticalPatterns, buildCleanupChecklist } from '../knowledge/index.js';
@@ -274,6 +274,65 @@ export function registerTools(server: McpServer): void {
             : pipeline.status === 'error'
               ? { control: 'user', description: `Error: ${pipeline.error_message}. Use force_advance=true to skip.`, bootstrap_prompt: `Pipeline error at "${current}": ${pipeline.error_message}\n\nUse pipeline_next with pipeline_id="${pipeline.pipeline_id}" force_advance=true to skip this overlay.` }
               : { control: 'agent', description: (requirements as Record<string, unknown>).instructions as string ?? 'Continue the pipeline.', bootstrap_prompt: `Use pipeline_next with pipeline_id="${pipeline.pipeline_id}" to continue.` },
+      });
+    },
+  );
+
+  // =========================================================================
+  // PIPELINE LIFECYCLE — cancel & purge
+  // =========================================================================
+
+  server.tool(
+    'pipeline_cancel',
+    'Cancel a single pipeline. Use when a pipeline is stuck or no longer needed.',
+    {
+      pipeline_id: z.string().describe('The pipeline to cancel'),
+      reason: z.string().optional().describe('Why the pipeline is being cancelled'),
+    },
+    async (args) => {
+      const result = cancelPipeline(args.pipeline_id, args.reason);
+      if (!result) return output({ status: 'error', data: {}, message: `Pipeline "${args.pipeline_id}" not found.`, next: { control: 'user', description: 'Pipeline not found.', bootstrap_prompt: 'Use pipeline_status to find active pipelines.' } });
+
+      return output({
+        status: 'success',
+        data: {
+          pipeline_id: result.pipeline_id,
+          target: result.target_server_id,
+          was_at_overlay: result.overlays[result.overlay_index] ?? 'done',
+          status: result.status,
+        },
+        message: `Pipeline cancelled: was at "${result.overlays[result.overlay_index] ?? 'done'}" for ${result.target_server_id}.`,
+        next: { control: 'user', description: 'Pipeline cancelled. Start a new one when ready.', bootstrap_prompt: 'Use refine or ingest to start a new pipeline.' },
+      });
+    },
+  );
+
+  server.tool(
+    'pipeline_purge',
+    'Purge all stuck or orphaned pipelines from prior sessions. Moves every non-completed pipeline to cancelled status in one call.',
+    {
+      reason: z.string().optional().describe('Why pipelines are being purged (default: "orphaned pipeline from prior session")'),
+    },
+    async (args) => {
+      const result = purgeStuckPipelines(args.reason);
+
+      if (result.purged === 0) {
+        return output({
+          status: 'success',
+          data: { purged: 0 },
+          message: 'No stuck pipelines found. Everything is clean.',
+          next: { control: 'user', description: 'No cleanup needed.', bootstrap_prompt: 'Use refine or ingest to start a new pipeline.' },
+        });
+      }
+
+      return output({
+        status: 'success',
+        data: {
+          purged: result.purged,
+          pipelines: result.pipelines,
+        },
+        message: `${result.purged} orphaned pipeline(s) purged.`,
+        next: { control: 'user', description: `${result.purged} pipeline(s) cleaned up. Ready for a fresh cycle.`, bootstrap_prompt: 'All orphaned pipelines purged. Use refine or ingest to start a new pipeline.' },
       });
     },
   );

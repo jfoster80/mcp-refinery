@@ -39,7 +39,7 @@ export type AuditAction =
   | 'delivery.plan' | 'delivery.pr_created' | 'delivery.tests_run'
   | 'delivery.released' | 'delivery.rolled_back'
   | 'governance.approval' | 'governance.escalation' | 'policy.violation'
-  | 'pipeline.start' | 'pipeline.advance' | 'pipeline.sync' | 'pipeline.cleanup' | 'pipeline.documentation'
+  | 'pipeline.start' | 'pipeline.advance' | 'pipeline.sync' | 'pipeline.cancel' | 'pipeline.cleanup' | 'pipeline.documentation'
   | 'deliberation.start' | 'deliberation.resolve'
   | 'research_ops.case_created' | 'research_ops.case_advanced'
   | 'research_ops.proposal_frozen' | 'research_ops.case_completed'

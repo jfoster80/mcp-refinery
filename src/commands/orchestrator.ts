@@ -396,6 +396,62 @@ export function getActivePipeline(serverId?: string): PipelineState | null {
   return (all.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] as PipelineState) ?? null;
 }
 
+/**
+ * Cancel a single pipeline. Moves it to 'error' status with a cancellation reason.
+ */
+export function cancelPipeline(pipelineId: string, reason?: string): PipelineState | null {
+  const pipeline = store().get(pipelineId);
+  if (!pipeline) return null;
+
+  if (pipeline.status === 'completed' || pipeline.status === 'error') {
+    return pipeline as PipelineState;
+  }
+
+  pipeline.status = 'error';
+  pipeline.error_message = reason ?? 'Cancelled by user';
+  pipeline.updated_at = new Date().toISOString();
+  store().update(pipeline.pipeline_id, pipeline);
+
+  recordAudit('pipeline.cancel', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+    reason: pipeline.error_message,
+    cancelled_at_overlay: pipeline.overlays[pipeline.overlay_index],
+    overlay_index: pipeline.overlay_index,
+  });
+
+  return pipeline as PipelineState;
+}
+
+/**
+ * Purge all stuck or orphaned pipelines. Moves any pipeline that is not
+ * 'completed' or 'error' to 'error' status with a purge reason.
+ * Returns the count of pipelines purged.
+ */
+export function purgeStuckPipelines(reason?: string): { purged: number; pipelines: Array<{ pipeline_id: string; was_at: string; target: string }> } {
+  const stuck = store().list((p) => p.status !== 'completed' && p.status !== 'error');
+  const purged: Array<{ pipeline_id: string; was_at: string; target: string }> = [];
+
+  for (const pipeline of stuck) {
+    pipeline.status = 'error';
+    pipeline.error_message = reason ?? 'Purged — orphaned pipeline from prior session';
+    pipeline.updated_at = new Date().toISOString();
+    store().update(pipeline.pipeline_id, pipeline);
+
+    recordAudit('pipeline.cancel', 'orchestrator', 'pipeline', pipeline.pipeline_id, {
+      reason: pipeline.error_message,
+      action: 'purge',
+      cancelled_at_overlay: pipeline.overlays[pipeline.overlay_index],
+    });
+
+    purged.push({
+      pipeline_id: pipeline.pipeline_id,
+      was_at: pipeline.overlays[pipeline.overlay_index] ?? 'unknown',
+      target: pipeline.target_server_id,
+    });
+  }
+
+  return { purged: purged.length, pipelines: purged };
+}
+
 // ---------------------------------------------------------------------------
 // Step Execution
 // ---------------------------------------------------------------------------
